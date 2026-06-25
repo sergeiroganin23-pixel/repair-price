@@ -2,7 +2,7 @@ import { drizzle } from "drizzle-orm/better-sqlite3";
 import Database from "better-sqlite3";
 import { eq, desc } from "drizzle-orm";
 import {
-  users, categories, subcategories, deviceModels, services, suppliers, changeRequests,
+  users, categories, subcategories, deviceModels, services, suppliers, changeRequests, orders,
   type User, type InsertUser,
   type Category, type InsertCategory,
   type Subcategory, type InsertSubcategory,
@@ -10,6 +10,7 @@ import {
   type Service, type InsertService,
   type Supplier, type InsertSupplier,
   type ChangeRequest, type InsertChangeRequest,
+  type Order, type InsertOrder,
 } from "@shared/schema";
 import bcrypt from "bcryptjs";
 
@@ -77,6 +78,23 @@ sqlite.exec(`
     proposed_value TEXT,
     status TEXT NOT NULL DEFAULT 'pending',
     admin_comment TEXT,
+    created_at TEXT NOT NULL
+  );
+  CREATE TABLE IF NOT EXISTS orders (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    message_id TEXT NOT NULL UNIQUE,
+    client_name TEXT,
+    phone TEXT,
+    discount TEXT,
+    device TEXT,
+    brand TEXT,
+    issue TEXT,
+    location TEXT,
+    source_url TEXT,
+    raw_text TEXT,
+    status TEXT NOT NULL DEFAULT 'новая',
+    called INTEGER NOT NULL DEFAULT 0,
+    assigned_to INTEGER,
     created_at TEXT NOT NULL
   );
 `);
@@ -215,6 +233,15 @@ export interface IStorage {
   getPendingChangeRequests(): ChangeRequest[];
   createChangeRequest(data: InsertChangeRequest): ChangeRequest;
   updateChangeRequestStatus(id: number, status: string, adminComment?: string): ChangeRequest | undefined;
+
+  // Orders
+  getOrders(): Order[];
+  getNewOrdersCount(): number;
+  getOrderById(id: number): Order | undefined;
+  createOrder(data: InsertOrder): Order;
+  orderExists(messageId: string): boolean;
+  updateOrderStatus(id: number, status: string): Order | undefined;
+  updateOrderCalled(id: number, called: boolean): Order | undefined;
 }
 
 export class SQLiteStorage implements IStorage {
@@ -321,6 +348,30 @@ export class SQLiteStorage implements IStorage {
     const updateData: any = { status };
     if (adminComment !== undefined) updateData.adminComment = adminComment;
     return db.update(changeRequests).set(updateData).where(eq(changeRequests.id, id)).returning().get();
+  }
+
+  // ─── Orders ───────────────────────────────────────────────────────────────────────
+  getOrders() {
+    return db.select().from(orders).orderBy(desc(orders.createdAt)).all();
+  }
+  getNewOrdersCount() {
+    return db.select().from(orders).where(eq(orders.status, "новая")).all().length;
+  }
+  getOrderById(id: number) {
+    return db.select().from(orders).where(eq(orders.id, id)).get();
+  }
+  createOrder(data: InsertOrder) {
+    return db.insert(orders).values(data).returning().get();
+  }
+  orderExists(messageId: string) {
+    const row = db.select().from(orders).where(eq(orders.messageId, messageId)).get();
+    return !!row;
+  }
+  updateOrderStatus(id: number, status: string) {
+    return db.update(orders).set({ status }).where(eq(orders.id, id)).returning().get();
+  }
+  updateOrderCalled(id: number, called: boolean) {
+    return db.update(orders).set({ called }).where(eq(orders.id, id)).returning().get();
   }
 }
 

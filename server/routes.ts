@@ -279,4 +279,40 @@ export function registerRoutes(httpServer: Server, app: Express) {
     const user = storage.createUser({ username: username.toLowerCase(), passwordHash, role: role || "master", displayName });
     res.json({ id: user.id, username: user.username, role: user.role, displayName: user.displayName });
   });
+
+  // ─── Orders (Email Leads) ────────────────────────────────────────────────
+  // GET /api/orders — список всех заявок (требует авторизации)
+  app.get("/api/orders", authenticateToken, (req: AuthRequest, res: Response) => {
+    res.json(storage.getOrders());
+  });
+
+  // GET /api/orders/new-count — количество новых заявок (для polling)
+  app.get("/api/orders/new-count", authenticateToken, (req: AuthRequest, res: Response) => {
+    res.json({ count: storage.getNewOrdersCount() });
+  });
+
+  // PUT /api/orders/:id/status — смена статуса
+  app.put("/api/orders/:id/status", authenticateToken, (req: AuthRequest, res: Response) => {
+    const id = parseInt(req.params.id);
+    const { status } = req.body;
+    const validStatuses = ["новая", "в_работе", "готово", "отказ", "записал"];
+    if (!status || !validStatuses.includes(status)) {
+      return res.status(400).json({ error: "Недопустимый статус" });
+    }
+    const result = storage.updateOrderStatus(id, status);
+    if (!result) return res.status(404).json({ error: "Заявка не найдена" });
+    res.json(result);
+  });
+
+  // PUT /api/orders/:id/called — отметка прозвонил/не прозвонил
+  app.put("/api/orders/:id/called", authenticateToken, (req: AuthRequest, res: Response) => {
+    const id = parseInt(req.params.id);
+    const { called } = req.body;
+    if (typeof called !== "boolean") {
+      return res.status(400).json({ error: "called должен быть boolean" });
+    }
+    const result = storage.updateOrderCalled(id, called);
+    if (!result) return res.status(404).json({ error: "Заявка не найдена" });
+    res.json(result);
+  });
 }

@@ -83,6 +83,29 @@ export const insertSupplierSchema = createInsertSchema(suppliers).omit({ id: tru
 export type InsertSupplier = z.infer<typeof insertSupplierSchema>;
 export type Supplier = typeof suppliers.$inferSelect;
 
+// ─── Orders (email quiz leads) ──────────────────────────────────────────────
+export const orders = sqliteTable("orders", {
+  id: integer("id").primaryKey({ autoIncrement: true }),
+  messageId: text("message_id").notNull().unique(), // unique email message-id
+  clientName: text("client_name"),
+  phone: text("phone"),
+  discount: text("discount"),
+  device: text("device"),
+  brand: text("brand"),
+  issue: text("issue"),
+  location: text("location"),
+  sourceUrl: text("source_url"),
+  rawText: text("raw_text"),
+  status: text("status").notNull().default("новая"), // новая | в_работе | готово | отказ | записал
+  called: integer("called", { mode: "boolean" }).notNull().default(false),
+  assignedTo: integer("assigned_to"),
+  createdAt: text("created_at").notNull(),
+});
+
+export const insertOrderSchema = createInsertSchema(orders).omit({ id: true });
+export type InsertOrder = z.infer<typeof insertOrderSchema>;
+export type Order = typeof orders.$inferSelect;
+
 // ─── Change Requests ──────────────────────────────────────────────────────────
 export const changeRequests = sqliteTable("change_requests", {
   id: integer("id").primaryKey({ autoIncrement: true }),

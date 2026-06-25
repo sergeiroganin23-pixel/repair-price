@@ -1,7 +1,7 @@
-import { useState } from "react";
-import { Switch, Route, Router, Link, useLocation } from "wouter";
+import { useState, useEffect, useRef } from "react";
+import { Switch, Route, Router, Link } from "wouter";
 import { useHashLocation } from "wouter/use-hash-location";
-import { QueryClientProvider } from "@tanstack/react-query";
+import { QueryClientProvider, useQuery } from "@tanstack/react-query";
 import { queryClient } from "@/lib/queryClient";
 import { AuthProvider, useAuth } from "@/lib/auth";
 import { Toaster } from "@/components/ui/toaster";
@@ -11,12 +11,38 @@ import PriceListPage from "@/pages/PriceListPage";
 import SuppliersPage from "@/pages/SuppliersPage";
 import AdminPage from "@/pages/AdminPage";
 import RequestModal from "@/pages/RequestModal";
+import OrdersPage from "@/pages/OrdersPage";
 
 import {
-  LayoutList, Truck, ShieldCheck, LogOut, Menu, X, Sun, Moon,
+  LayoutList, Truck, ShieldCheck, LogOut, Sun, Moon, Bell,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 
+// ─── Звуковой сигнал через Web Audio API ─────────────────────────────────────
+const _playBeep = (ctx: AudioContext, t: number, freq: number, dur: number) => {
+  const osc = ctx.createOscillator();
+  const g = ctx.createGain();
+  osc.connect(g);
+  g.connect(ctx.destination);
+  osc.frequency.value = freq;
+  osc.type = "sine";
+  g.gain.setValueAtTime(0, t);
+  g.gain.linearRampToValueAtTime(0.35, t + 0.01);
+  g.gain.linearRampToValueAtTime(0, t + dur);
+  osc.start(t);
+  osc.stop(t + dur + 0.01);
+};
+
+function playNotificationSound() {
+  try {
+    const ctx = new (window.AudioContext || (window as any).webkitAudioContext)();
+    const t = ctx.currentTime;
+    _playBeep(ctx, t, 880, 0.12);
+    _playBeep(ctx, t + 0.18, 1100, 0.12);
+  } catch {}
+}
+
+// ─── ThemeToggle ──────────────────────────────────────────────────────────────
 function ThemeToggle() {
   const [dark, setDark] = useState(() =>
     window.matchMedia("(prefers-color-scheme: dark)").matches
@@ -28,7 +54,6 @@ function ThemeToggle() {
     document.documentElement.classList.toggle("dark", next);
   }
 
-  // Init on mount
   useState(() => {
     document.documentElement.classList.toggle("dark", dark);
   });
@@ -40,7 +65,7 @@ function ThemeToggle() {
   );
 }
 
-// ─── Logo ─────────────────────────────────────────────────────────────────
+// ─── Logo ─────────────────────────────────────────────────────────────────────
 function Logo() {
   return (
     <div className="flex items-center gap-2.5">
@@ -56,26 +81,74 @@ function Logo() {
   );
 }
 
-// ─── Nav ──────────────────────────────────────────────────────────────────
-function NavLink({ href, icon, label }: { href: string; icon: React.ReactNode; label: string }) {
+// ─── Nav ──────────────────────────────────────────────────────────────────────
+function NavLink({
+  href,
+  icon,
+  label,
+  badge,
+}: {
+  href: string;
+  icon: React.ReactNode;
+  label: string;
+  badge?: number;
+}) {
   const [location] = useHashLocation();
   const isActive = location === href || (href === "/" && location === "");
   return (
     <Link
       href={href}
-      className={`flex items-center gap-2 px-3 py-2 rounded-lg text-sm font-medium transition-colors ${isActive ? "bg-primary text-primary-foreground" : "text-muted-foreground hover:text-foreground hover:bg-muted"}`}
+      className={`relative flex items-center gap-2 px-3 py-2 rounded-lg text-sm font-medium transition-colors ${
+        isActive
+          ? "bg-primary text-primary-foreground"
+          : "text-muted-foreground hover:text-foreground hover:bg-muted"
+      }`}
     >
       {icon}
       <span className="hidden sm:block">{label}</span>
+      {/* Зелёная мигающая точка */}
+      {badge != null && badge > 0 && (
+        <span className="absolute -top-1 -right-1 flex h-4 w-4 items-center justify-center">
+          <span className="animate-ping absolute inline-flex h-3 w-3 rounded-full bg-green-400 opacity-75" />
+          <span className="relative inline-flex rounded-full h-3 w-3 bg-green-500 items-center justify-center text-white text-[8px] font-bold leading-none">
+            {badge > 9 ? "9+" : badge}
+          </span>
+        </span>
+      )}
     </Link>
   );
 }
 
-// ─── Layout ───────────────────────────────────────────────────────────────
+// ─── Notification badge hook ──────────────────────────────────────────────────
+function useNewOrdersCount() {
+  const prevCountRef = useRef<number | null>(null);
+  const [location] = useHashLocation();
+
+  const { data } = useQuery<{ count: number }>({
+    queryKey: ["/api/orders/new-count"],
+    refetchInterval: 30_000,
+  });
+
+  const count = data?.count ?? 0;
+
+  useEffect(() => {
+    if (prevCountRef.current !== null && count > prevCountRef.current) {
+      // Появились новые заявки — воспроизводим звук
+      playNotificationSound();
+    }
+    prevCountRef.current = count;
+  }, [count]);
+
+  // При открытии страницы заявок не скрываем точку — она исчезнет когда
+  // мастер поменяет статусы (новых станет 0)
+  return count;
+}
+
+// ─── Layout ───────────────────────────────────────────────────────────────────
 function Layout({ children }: { children: React.ReactNode }) {
   const { user, logout, isAdmin } = useAuth();
-  const [mobileOpen, setMobileOpen] = useState(false);
   const [requestOpen, setRequestOpen] = useState(false);
+  const newOrdersCount = useNewOrdersCount();
 
   return (
     <div className="min-h-screen flex flex-col">
@@ -88,13 +161,26 @@ function Layout({ children }: { children: React.ReactNode }) {
           <nav className="hidden md:flex items-center gap-1 flex-1 px-4">
             <NavLink href="/" icon={<LayoutList className="w-4 h-4" />} label="Прайс-лист" />
             <NavLink href="/suppliers" icon={<Truck className="w-4 h-4" />} label="Поставщики" />
-            {isAdmin && <NavLink href="/admin" icon={<ShieldCheck className="w-4 h-4" />} label="Админ-панель" />}
+            <NavLink
+              href="/orders"
+              icon={<Bell className="w-4 h-4" />}
+              label="Заявки"
+              badge={newOrdersCount}
+            />
+            {isAdmin && (
+              <NavLink href="/admin" icon={<ShieldCheck className="w-4 h-4" />} label="Админ-панель" />
+            )}
           </nav>
 
           <div className="flex items-center gap-2">
             <ThemeToggle />
             <span className="hidden md:block text-sm text-muted-foreground">{user?.displayName}</span>
-            <Button size="sm" variant="ghost" onClick={logout} className="gap-1.5 h-8 text-muted-foreground hover:text-foreground">
+            <Button
+              size="sm"
+              variant="ghost"
+              onClick={logout}
+              className="gap-1.5 h-8 text-muted-foreground hover:text-foreground"
+            >
               <LogOut className="w-4 h-4" />
               <span className="hidden sm:block text-xs">Выйти</span>
             </Button>
@@ -106,7 +192,15 @@ function Layout({ children }: { children: React.ReactNode }) {
       <div className="md:hidden border-b border-border bg-background px-4 py-2 flex gap-1">
         <NavLink href="/" icon={<LayoutList className="w-4 h-4" />} label="Прайс" />
         <NavLink href="/suppliers" icon={<Truck className="w-4 h-4" />} label="Партнёры" />
-        {isAdmin && <NavLink href="/admin" icon={<ShieldCheck className="w-4 h-4" />} label="Админ" />}
+        <NavLink
+          href="/orders"
+          icon={<Bell className="w-4 h-4" />}
+          label="Заявки"
+          badge={newOrdersCount}
+        />
+        {isAdmin && (
+          <NavLink href="/admin" icon={<ShieldCheck className="w-4 h-4" />} label="Админ" />
+        )}
       </div>
 
       {/* Content */}
@@ -114,6 +208,7 @@ function Layout({ children }: { children: React.ReactNode }) {
         <Switch>
           <Route path="/" component={() => <PriceListPage onRequestOpen={() => setRequestOpen(true)} />} />
           <Route path="/suppliers" component={SuppliersPage} />
+          <Route path="/orders" component={OrdersPage} />
           {isAdmin && <Route path="/admin" component={AdminPage} />}
           <Route>
             <div className="text-center py-20 text-muted-foreground">Страница не найдена</div>
@@ -127,16 +222,17 @@ function Layout({ children }: { children: React.ReactNode }) {
   );
 }
 
-// ─── App Root ─────────────────────────────────────────────────────────────
+// ─── App Root ─────────────────────────────────────────────────────────────────
 function AuthGate() {
   const { user } = useAuth();
 
-  if (!user) return (
-    <>
-      <LoginPage />
-      <Toaster />
-    </>
-  );
+  if (!user)
+    return (
+      <>
+        <LoginPage />
+        <Toaster />
+      </>
+    );
 
   return <Layout><div /></Layout>;
 }
