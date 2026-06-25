@@ -30,21 +30,15 @@ function parseQuizEmail(text: string, subject: string) {
     return undefined;
   }
 
-  // Ищем ответы на вопросы квиза (поддержка форматов: "Вопрос → Ответ" и "Вопрос:\nОтвет: ...")
+  // Ищем ответы на вопросы квиза
   function extractAnswer(question: string): string | undefined {
     for (let i = 0; i < lines.length; i++) {
       if (lines[i].toLowerCase().includes(question.toLowerCase())) {
-        // Формат 1: Вопрос: ... → Ответ
+        // Ответ после стрелки
         const arrow = lines[i].match(/→\s*(.+)$/);
         if (arrow) return arrow[1].trim();
-        // Формат 2 (Envybox): следующая строка "Ответ: ..."
-        if (i + 1 < lines.length) {
-          const nextLine = lines[i + 1];
-          const answerMatch = nextLine.match(/^ответ[:\s]+(.+)$/i);
-          if (answerMatch) return answerMatch[1].trim();
-          // Просто следующая строка
-          if (!nextLine.toLowerCase().startsWith("вопрос")) return nextLine;
-        }
+        // Или следующая строка
+        if (i + 1 < lines.length) return lines[i + 1];
       }
     }
     return undefined;
@@ -61,17 +55,10 @@ function parseQuizEmail(text: string, subject: string) {
   let brand = extractAnswer("Выберите марку");
   let issue = extractAnswer("Выберите неисправность");
 
-  // Дополнительные поля из Envybox формата
-  let model = extractAnswer("Выберите модель") || extractAnswer("модель");
-
   // Fallback: попробуем найти по другим паттернам
-  if (!device) device = extractAnswer("Тип устройства") || extractAnswer("тип устройства");
-  if (!brand) brand = extractAnswer("марку телефона") || extractAnswer("Марка") || extractAnswer("марку");
-  if (!issue) issue = extractAnswer("неисправность") || extractAnswer("Проблема") || extractAnswer("Какая у вас");
-
-  // Если есть модель — добавляем к бренду для наглядности
-  if (model && brand) brand = `${brand} ${model}`;
-  else if (model) brand = model;
+  if (!device) device = extractAnswer("Тип устройства");
+  if (!brand) brand = extractAnswer("марку телефона") || extractAnswer("Марка");
+  if (!issue) issue = extractAnswer("неисправность") || extractAnswer("Проблема");
 
   return {
     clientName: clientName || null,
@@ -92,36 +79,20 @@ async function pollOnce() {
     connection = await imapSimple.connect(IMAP_CONFIG);
     await connection.openBox("INBOX");
 
-    // Ищем все письма от Envybox (от kwidget@envybox.io или noreply@envybox.io)
-    // Также пробуем ALL как fallback
-    const since = new Date();
-    since.setDate(since.getDate() - 30); // за последние 30 дней
-    const searchCriteria = [["SINCE", since]];
+    // Ищем все письма, которые содержат слово "заявку" в теме
+    // Или от квиз-сервиса
+    const searchCriteria = [["SUBJECT", "заявку"]];
     const fetchOptions = {
       bodies: ["HEADER", "TEXT", ""],
-      markSeen: false, // не помечаем как прочитанные автоматически
+      markSeen: true,
     };
 
     const messages = await connection.search(searchCriteria, fetchOptions);
     let newCount = 0;
 
-    log(`[emailPoller] Найдено писем: ${messages.length}`);
-
     for (const msg of messages) {
-      // Фильтруем по теме на стороне Node.js (кириллица в IMAP-запросе не всегда работает)
-      const headerPart = msg.parts.find((p: any) => p.which === "HEADER");
-      const subjectArr = headerPart?.body?.subject || headerPart?.body?.Subject || [];
-      const subject = (Array.isArray(subjectArr) ? subjectArr[0] : subjectArr) || "";
-      const subjectLower = subject.toLowerCase();
-      const isQuizLead =
-        subjectLower.includes("заявк") ||
-        subjectLower.includes("quiz") ||
-        subjectLower.includes("виджет") ||
-        subjectLower.includes("квиз");
-      if (!isQuizLead) continue;
-      log(`[emailPoller] Обрабатываю: ${subject}`);
-
       // Получаем message-id
+      const headerPart = msg.parts.find((p: any) => p.which === "HEADER");
       const headers = headerPart?.body || {};
       const midArr = (headers["message-id"] || headers["Message-ID"] || []);
       const rawMessageId = Array.isArray(midArr) ? (midArr[0] || "") : String(midArr);
@@ -142,15 +113,13 @@ async function pollOnce() {
 
       const fields = parseQuizEmail(textContent, parsed.subject || "");
 
-      const now = (parsed.date || new Date()).toISOString();
-      storage.createRepair({
+      storage.createOrder({
         messageId,
         ...fields,
-        source: "email",
         status: "новая",
         called: false,
-        createdAt: now,
-        updatedAt: now,
+        assignedTo: null,
+        createdAt: (parsed.date || new Date()).toISOString(),
       });
 
       newCount++;
