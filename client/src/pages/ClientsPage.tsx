@@ -27,7 +27,8 @@ export default function ClientsPage() {
 
   const { data: repairs = [] } = useQuery<any[]>({
     queryKey: ["/api/repairs"],
-    queryFn: () => fetch("/api/repairs", { headers: { Authorization: `Bearer ${token}` } }).then(r => r.json()),
+    queryFn: () => fetch("/api/repairs", { headers: { Authorization: `Bearer ${token}` } }).then(r => r.ok ? r.json() : []),
+    retry: false,
   });
 
   const createMutation = useMutation({
