@@ -254,6 +254,12 @@ export function registerRoutes(httpServer: Server, app: Express) {
     res.json(result);
   });
 
+  // ─── GET /api/users — список пользователей для всех авторизованных
+  app.get("/api/users", authenticateToken, (req: AuthRequest, res: Response) => {
+    const allUsers = storage.getAllUsers();
+    res.json(allUsers.map(u => ({ id: u.id, username: u.username, role: u.role, displayName: u.displayName })));
+  });
+
   // ─── Admin: User Management ───────────────────────────────────────────────
   app.get("/api/admin/users", authenticateToken, requireAdmin, (req: AuthRequest, res: Response) => {
     const allUsers = storage.getAllUsers();

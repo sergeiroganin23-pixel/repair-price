@@ -13,7 +13,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { useToast } from "@/hooks/use-toast";
 import {
   Phone, User, MapPin, Wrench, Tag, Calendar, Globe, Plus, Pencil,
-  Shield, Clock, CreditCard, DollarSign, Mail, ClipboardList, Search, UserPlus, X,
+  Shield, Clock, CreditCard, Banknote, Mail, ClipboardList, Search, UserPlus, X, ChevronDown,
 } from "lucide-react";
 import type { Repair, Client } from "@shared/schema";
 
@@ -131,6 +131,12 @@ function ClientSearch({
 function ManualRepairForm({ onClose }: { onClose: () => void }) {
   const { toast } = useToast();
 
+  // Мастера
+  const { data: allUsers = [] } = useQuery<{id: number; displayName: string; role: string}[]>({
+    queryKey: ["/api/users"],
+    retry: false,
+  });
+
   // Клиент
   const [clientData, setClientData] = useState<{
     clientId?: number | null;
@@ -155,6 +161,7 @@ function ManualRepairForm({ onClose }: { onClose: () => void }) {
     masterComment: "",
     status: "новая",
     discount: "",
+    masterId: "",
   });
   const set = (k: string, v: string) => setForm(p => ({ ...p, [k]: v }));
 
@@ -175,6 +182,7 @@ function ManualRepairForm({ onClose }: { onClose: () => void }) {
         finalPrice: form.finalPrice ? parseFloat(form.finalPrice) : null,
         prepayment: form.prepayment ? parseFloat(form.prepayment) : null,
         source: "manual",
+        masterId: form.masterId ? parseInt(form.masterId) : null,
       };
       return apiRequest("POST", "/api/repairs", data).then(r => r.json());
     },
@@ -368,6 +376,17 @@ function ManualRepairForm({ onClose }: { onClose: () => void }) {
       </div>
 
       <div className="space-y-1.5">
+        <Label>Мастер</Label>
+        <Select value={form.masterId} onValueChange={v => set("masterId", v)}>
+          <SelectTrigger><SelectValue placeholder="Не назначен" /></SelectTrigger>
+          <SelectContent>
+            <SelectItem value="">Не назначен</SelectItem>
+            {allUsers.map(u => <SelectItem key={u.id} value={u.id.toString()}>{u.displayName}</SelectItem>)}
+          </SelectContent>
+        </Select>
+      </div>
+
+      <div className="space-y-1.5">
         <Label>Комментарий мастера</Label>
         <Textarea value={form.masterComment} onChange={e => set("masterComment", e.target.value)} rows={2}
           placeholder="Внутренние заметки..." />
@@ -376,7 +395,7 @@ function ManualRepairForm({ onClose }: { onClose: () => void }) {
       <div className="flex gap-2 justify-end pt-2 border-t border-border">
         <Button variant="outline" onClick={onClose}>Отмена</Button>
         <Button onClick={submit} disabled={isLoading || !clientData.clientName.trim()}>
-          {isLoading ? "Сохраняю..." : "Создать заявку"}
+          {isLoading ? "Сохраняю..." : "Создать заказ"}
         </Button>
       </div>
     </div>
@@ -386,6 +405,11 @@ function ManualRepairForm({ onClose }: { onClose: () => void }) {
 // ─── Форма редактирования существующей заявки ─────────────────────────────────
 function EditRepairForm({ repair, onClose }: { repair: Repair; onClose: () => void }) {
   const { toast } = useToast();
+  const { data: allUsers = [] } = useQuery<{id: number; displayName: string; role: string}[]>({
+    queryKey: ["/api/users"],
+    retry: false,
+  });
+
   const [form, setForm] = useState({
     clientName: repair.clientName || "",
     phone: repair.phone || "",
@@ -403,6 +427,7 @@ function EditRepairForm({ repair, onClose }: { repair: Repair; onClose: () => vo
     masterComment: repair.masterComment || "",
     status: repair.status || "новая",
     discount: repair.discount || "",
+    masterId: repair.masterId?.toString() || "",
   });
   const set = (k: string, v: string) => setForm(p => ({ ...p, [k]: v }));
 
@@ -413,6 +438,7 @@ function EditRepairForm({ repair, onClose }: { repair: Repair; onClose: () => vo
         estimatedPrice: form.estimatedPrice ? parseFloat(form.estimatedPrice) : null,
         finalPrice: form.finalPrice ? parseFloat(form.finalPrice) : null,
         prepayment: form.prepayment ? parseFloat(form.prepayment) : null,
+        masterId: form.masterId ? parseInt(form.masterId) : null,
       };
       return apiRequest("PUT", `/api/repairs/${repair.id}`, data).then(r => r.json());
     },
@@ -506,6 +532,17 @@ function EditRepairForm({ repair, onClose }: { repair: Repair; onClose: () => vo
       </div>
 
       <div className="space-y-1.5">
+        <Label>Мастер</Label>
+        <Select value={form.masterId} onValueChange={v => set("masterId", v)}>
+          <SelectTrigger><SelectValue placeholder="Не назначен" /></SelectTrigger>
+          <SelectContent>
+            <SelectItem value="">Не назначен</SelectItem>
+            {allUsers.map(u => <SelectItem key={u.id} value={u.id.toString()}>{u.displayName}</SelectItem>)}
+          </SelectContent>
+        </Select>
+      </div>
+
+      <div className="space-y-1.5">
         <Label>Комментарий мастера</Label>
         <Textarea value={form.masterComment} onChange={e => set("masterComment", e.target.value)} rows={2} />
       </div>
@@ -521,7 +558,7 @@ function EditRepairForm({ repair, onClose }: { repair: Repair; onClose: () => vo
 }
 
 // ─── Карточка заявки ───────────────────────────────────────────────────────────
-function RepairCard({ repair }: { repair: Repair }) {
+function RepairCard({ repair, showCalled = true }: { repair: Repair; showCalled?: boolean }) {
   const [editOpen, setEditOpen] = useState(false);
 
   const statusMutation = useMutation({
@@ -579,6 +616,12 @@ function RepairCard({ repair }: { repair: Repair }) {
                 <span className="font-medium">{repair.clientName}</span>
               </div>
             )}
+            {repair.masterId != null && (
+              <div className="flex items-center gap-2">
+                <Wrench className="w-4 h-4 text-muted-foreground shrink-0" />
+                <span className="text-muted-foreground text-sm">Мастер #{repair.masterId}</span>
+              </div>
+            )}
             {repair.phone && (
               <div className="flex items-center gap-2">
                 <Phone className="w-4 h-4 text-muted-foreground shrink-0" />
@@ -604,7 +647,7 @@ function RepairCard({ repair }: { repair: Repair }) {
             <div className="flex flex-wrap gap-3 text-xs text-muted-foreground border-t border-border/50 pt-2">
               {(repair.finalPrice || repair.estimatedPrice) && (
                 <span className="flex items-center gap-1 text-green-600 dark:text-green-400 font-medium">
-                  <DollarSign className="w-3 h-3" />
+                  <Banknote className="w-3 h-3" />
                   {(repair.finalPrice || repair.estimatedPrice)?.toLocaleString("ru-RU")} ₽
                 </span>
               )}
@@ -635,22 +678,24 @@ function RepairCard({ repair }: { repair: Repair }) {
             </details>
           )}
 
-          {/* Прозвонил */}
-          <div className="flex items-center gap-2 pt-2 border-t border-border/50">
-            <Checkbox
-              id={`called-${repair.id}`}
-              checked={repair.called ?? false}
-              onCheckedChange={v => calledMutation.mutate(!!v)}
-              disabled={calledMutation.isPending}
-              className="data-[state=checked]:bg-green-500 data-[state=checked]:border-green-500"
-            />
-            <label
-              htmlFor={`called-${repair.id}`}
-              className={`text-sm cursor-pointer select-none ${repair.called ? "text-green-600 dark:text-green-400 font-medium" : "text-muted-foreground"}`}
-            >
-              {repair.called ? "Прозвонил" : "Не прозвонил"}
-            </label>
-          </div>
+          {/* Прозвонил — только для заявок с почты */}
+          {showCalled && (
+            <div className="flex items-center gap-2 pt-2 border-t border-border/50">
+              <Checkbox
+                id={`called-${repair.id}`}
+                checked={repair.called ?? false}
+                onCheckedChange={v => calledMutation.mutate(!!v)}
+                disabled={calledMutation.isPending}
+                className="data-[state=checked]:bg-green-500 data-[state=checked]:border-green-500"
+              />
+              <label
+                htmlFor={`called-${repair.id}`}
+                className={`text-sm cursor-pointer select-none ${repair.called ? "text-green-600 dark:text-green-400 font-medium" : "text-muted-foreground"}`}
+              >
+                {repair.called ? "Прозвонил" : "Не прозвонил"}
+              </label>
+            </div>
+          )}
         </CardContent>
       </Card>
 
@@ -671,26 +716,65 @@ function RepairList({
   emptyText,
   emptySubtext,
   action,
+  showCalled = true,
 }: {
   repairs: Repair[];
   emptyIcon: string;
   emptyText: string;
   emptySubtext: string;
   action?: React.ReactNode;
+  showCalled?: boolean;
 }) {
-  if (repairs.length === 0) {
-    return (
-      <div className="text-center py-20 text-muted-foreground">
-        <div className="text-4xl mb-3">{emptyIcon}</div>
-        <p className="font-medium">{emptyText}</p>
-        <p className="text-sm mt-1">{emptySubtext}</p>
-        {action && <div className="mt-4">{action}</div>}
-      </div>
-    );
-  }
+  const [statusFilter, setStatusFilter] = useState<string>("all");
+
+  const statusCounts = Object.keys(STATUS_LABELS).reduce((acc, s) => {
+    acc[s] = repairs.filter(r => r.status === s).length;
+    return acc;
+  }, {} as Record<string, number>);
+
+  const filtered = statusFilter === "all" ? repairs : repairs.filter(r => r.status === statusFilter);
+
   return (
-    <div className="space-y-3">
-      {repairs.map(r => <RepairCard key={r.id} repair={r} />)}
+    <div>
+      {/* Фильтр по статусам */}
+      <div className="flex flex-wrap gap-1.5 mb-4">
+        <button
+          onClick={() => setStatusFilter("all")}
+          className={`px-3 py-1 rounded-full text-xs font-medium transition-colors ${
+            statusFilter === "all"
+              ? "bg-foreground text-background"
+              : "bg-muted text-muted-foreground hover:text-foreground"
+          }`}
+        >
+          Все ({repairs.length})
+        </button>
+        {Object.entries(STATUS_LABELS).map(([v, l]) => statusCounts[v] > 0 && (
+          <button
+            key={v}
+            onClick={() => setStatusFilter(v)}
+            className={`px-3 py-1 rounded-full text-xs font-medium transition-colors ${
+              statusFilter === v
+                ? `${STATUS_COLORS[v]} opacity-100`
+                : "bg-muted text-muted-foreground hover:text-foreground"
+            }`}
+          >
+            {l} ({statusCounts[v]})
+          </button>
+        ))}
+      </div>
+
+      {filtered.length === 0 ? (
+        <div className="text-center py-20 text-muted-foreground">
+          <div className="text-4xl mb-3">{emptyIcon}</div>
+          <p className="font-medium">{statusFilter === "all" ? emptyText : `Нет заявок со статусом "${STATUS_LABELS[statusFilter]}"`}</p>
+          <p className="text-sm mt-1">{statusFilter === "all" ? emptySubtext : ""}</p>
+          {action && statusFilter === "all" && <div className="mt-4">{action}</div>}
+        </div>
+      ) : (
+        <div className="space-y-3">
+          {filtered.map(r => <RepairCard key={r.id} repair={r} showCalled={showCalled} />)}
+        </div>
+      )}
     </div>
   );
 }
@@ -724,7 +808,7 @@ export default function OrdersPage() {
         <h1 className="text-xl font-bold">Заявки</h1>
         {tab === "manual" && (
           <Button onClick={() => setCreateOpen(true)} className="gap-1.5" data-testid="button-create-repair">
-            <Plus className="w-4 h-4" /> Новая заявка
+            <Plus className="w-4 h-4" /> Новый заказ
           </Button>
         )}
       </div>
@@ -756,7 +840,7 @@ export default function OrdersPage() {
           }`}
         >
           <ClipboardList className="w-4 h-4" />
-          Ручные
+          Заказы
           {manualNew > 0 && (
             <span className="inline-flex items-center justify-center h-5 min-w-5 px-1 rounded-full bg-blue-500 text-white text-xs font-bold">
               {manualNew}
@@ -784,11 +868,12 @@ export default function OrdersPage() {
         <RepairList
           repairs={manualRepairs}
           emptyIcon="📋"
-          emptyText="Ручных заявок нет"
-          emptySubtext="Создайте первую заявку для клиента"
+          emptyText="Заказов нет"
+          emptySubtext="Создайте первый заказ для клиента"
+          showCalled={false}
           action={
             <Button onClick={() => setCreateOpen(true)} className="gap-1.5">
-              <Plus className="w-4 h-4" /> Создать заявку
+              <Plus className="w-4 h-4" /> Новый заказ
             </Button>
           }
         />
@@ -797,7 +882,7 @@ export default function OrdersPage() {
       {/* Диалог создания */}
       <Dialog open={createOpen} onOpenChange={setCreateOpen}>
         <DialogContent className="max-w-2xl max-h-[90vh] overflow-y-auto">
-          <DialogHeader><DialogTitle>Новая заявка</DialogTitle></DialogHeader>
+          <DialogHeader><DialogTitle>Новый заказ</DialogTitle></DialogHeader>
           <ManualRepairForm onClose={() => setCreateOpen(false)} />
         </DialogContent>
       </Dialog>

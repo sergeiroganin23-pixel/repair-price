@@ -183,8 +183,8 @@ export default function SalaryPage() {
   function openCreate() {
     setEditItem(null);
     setForm({
-      masterId: masters[0]?.id.toString() ?? "",
-      masterName: masters[0]?.displayName ?? "",
+      masterId: users[0]?.id.toString() ?? "",
+      masterName: users[0]?.displayName ?? "",
       type: "salary",
       amount: "",
       description: "",
@@ -308,7 +308,7 @@ export default function SalaryPage() {
           </SelectTrigger>
           <SelectContent>
             <SelectItem value="all">Все мастера</SelectItem>
-            {masters.map((m) => (
+            {users.map((m) => (
               <SelectItem key={m.id} value={m.id.toString()}>
                 {m.displayName}
               </SelectItem>
