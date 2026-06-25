@@ -1,297 +1,564 @@
 import { useState } from "react";
-import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
+import { useQuery, useMutation } from "@tanstack/react-query";
+import { queryClient, apiRequest } from "@/lib/queryClient";
 import { useAuth } from "@/lib/auth";
 import { useToast } from "@/hooks/use-toast";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
-import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import { Plus, CheckCircle2, Circle, Trash2, TrendingUp, TrendingDown, Banknote } from "lucide-react";
+import { Badge } from "@/components/ui/badge";
+import {
+  Dialog,
+  DialogContent,
+  DialogHeader,
+  DialogTitle,
+  DialogFooter,
+} from "@/components/ui/dialog";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
+import { Textarea } from "@/components/ui/textarea";
+import {
+  Table,
+  TableBody,
+  TableCell,
+  TableHead,
+  TableHeader,
+  TableRow,
+} from "@/components/ui/table";
+import { Plus, Trash2, CheckCircle2, Clock, TrendingUp, TrendingDown, Wallet } from "lucide-react";
 
-const SALARY_TYPES = [
-  { value: "salary", label: "Зарплата", color: "bg-blue-100 text-blue-800 dark:bg-blue-900 dark:text-blue-200" },
-  { value: "bonus", label: "Премия", color: "bg-green-100 text-green-800 dark:bg-green-900 dark:text-green-200" },
-  { value: "penalty", label: "Штраф", color: "bg-red-100 text-red-800 dark:bg-red-900 dark:text-red-200" },
-];
-
-const PAYMENT_METHODS = [
-  { value: "cash", label: "Наличные" },
-  { value: "card", label: "Карта" },
-  { value: "transfer", label: "Перевод" },
-];
-
-function apiReq(url: string, method: string, token: string, body?: any) {
-  return fetch(url, {
-    method,
-    headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
-    body: body ? JSON.stringify(body) : undefined,
-  }).then(r => r.json());
+interface Salary {
+  id: number;
+  masterId: number;
+  masterName: string;
+  type: "salary" | "bonus" | "penalty";
+  amount: number;
+  description: string | null;
+  repairId: number | null;
+  period: string | null;
+  paymentMethod: string | null;
+  paid: number;
+  createdAt: string;
+  date: string;
 }
 
-function getPeriod(offset = 0) {
-  const d = new Date();
-  d.setMonth(d.getMonth() + offset);
-  const y = d.getFullYear();
-  const m = String(d.getMonth() + 1).padStart(2, "0");
-  return `${y}-${m}`;
+interface User {
+  id: number;
+  username: string;
+  displayName: string;
+  role: string;
 }
 
-function formatPeriod(period: string) {
-  const [y, m] = period.split("-");
-  const months = ["Январь","Февраль","Март","Апрель","Май","Июнь","Июль","Август","Сентябрь","Октябрь","Ноябрь","Декабрь"];
-  return `${months[parseInt(m) - 1]} ${y}`;
+interface Stats {
+  total: number;
+  paid: number;
+  unpaid: number;
+  count: number;
 }
 
-// ─── Master Salary Card ───────────────────────────────────────────────────────
-function MasterCard({ master, period, token }: { master: any; period: string; token: string }) {
-  const qc = useQueryClient();
+const TYPE_LABELS: Record<string, string> = {
+  salary: "Зарплата",
+  bonus: "Премия",
+  penalty: "Штраф",
+};
+
+const TYPE_COLORS: Record<string, string> = {
+  salary: "bg-blue-100 text-blue-700 dark:bg-blue-900/30 dark:text-blue-400",
+  bonus: "bg-green-100 text-green-700 dark:bg-green-900/30 dark:text-green-400",
+  penalty: "bg-red-100 text-red-700 dark:bg-red-900/30 dark:text-red-400",
+};
+
+const METHOD_LABELS: Record<string, string> = {
+  cash: "Наличные",
+  card: "Карта",
+  transfer: "Перевод",
+};
+
+function fmt(n: number) {
+  return new Intl.NumberFormat("ru-RU", { style: "currency", currency: "RUB", maximumFractionDigits: 0 }).format(n);
+}
+
+function fmtDate(d: string) {
+  return new Date(d).toLocaleDateString("ru-RU");
+}
+
+export default function SalaryPage() {
+  const { isAdmin } = useAuth();
   const { toast } = useToast();
 
-  const { data: totals } = useQuery<any>({
-    queryKey: ["/api/salaries/totals", master.id, period],
-    queryFn: () => fetch(`/api/salaries/totals?masterId=${master.id}&period=${period}`, { headers: { Authorization: `Bearer ${token}` } }).then(r => r.json()),
+  const [filterMasterId, setFilterMasterId] = useState<string>("all");
+  const [filterFrom, setFilterFrom] = useState("");
+  const [filterTo, setFilterTo] = useState("");
+  const [showDialog, setShowDialog] = useState(false);
+  const [editItem, setEditItem] = useState<Salary | null>(null);
+
+  // Form state
+  const [form, setForm] = useState({
+    masterId: "",
+    masterName: "",
+    type: "salary",
+    amount: "",
+    description: "",
+    period: "",
+    paymentMethod: "cash",
+    paid: false,
+    date: new Date().toISOString().slice(0, 10),
   });
 
-  const { data: rows = [] } = useQuery<any[]>({
-    queryKey: ["/api/salaries", master.id, period],
-    queryFn: () => fetch(`/api/salaries?masterId=${master.id}&period=${period}`, { headers: { Authorization: `Bearer ${token}` } }).then(r => r.json()),
+  // Queries
+  const { data: users = [] } = useQuery<User[]>({
+    queryKey: ["/api/users"],
+    retry: false,
   });
 
-  const paidMutation = useMutation({
-    mutationFn: ({ id, paid }: { id: number; paid: boolean }) =>
-      apiReq(`/api/salaries/${id}/paid`, "PUT", token, { paid }),
+  const masters = users.filter((u) => u.role !== "admin");
+
+  const salaryQueryKey = ["/api/salaries", filterMasterId, filterFrom, filterTo];
+  const { data: salaries = [], isLoading } = useQuery<Salary[]>({
+    queryKey: salaryQueryKey,
+    queryFn: async () => {
+      const params = new URLSearchParams();
+      if (filterMasterId && filterMasterId !== "all") params.set("masterId", filterMasterId);
+      if (filterFrom) params.set("from", filterFrom);
+      if (filterTo) params.set("to", filterTo);
+      const r = await apiRequest("GET", `/api/salaries?${params}`);
+      return r.ok ? r.json() : [];
+    },
+    retry: false,
+  });
+
+  const statsKey = ["/api/salaries/stats", filterMasterId, filterFrom, filterTo];
+  const { data: stats } = useQuery<Stats>({
+    queryKey: statsKey,
+    queryFn: async () => {
+      const params = new URLSearchParams();
+      if (filterMasterId && filterMasterId !== "all") params.set("masterId", filterMasterId);
+      if (filterFrom) params.set("from", filterFrom);
+      if (filterTo) params.set("to", filterTo);
+      const r = await apiRequest("GET", `/api/salaries/stats?${params}`);
+      return r.ok ? r.json() : { total: 0, paid: 0, unpaid: 0, count: 0 };
+    },
+    retry: false,
+  });
+
+  const createMut = useMutation({
+    mutationFn: (data: any) => apiRequest("POST", "/api/salaries", data),
     onSuccess: () => {
-      qc.invalidateQueries({ queryKey: ["/api/salaries"] });
-      qc.invalidateQueries({ queryKey: ["/api/salaries/totals"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/salaries"] });
+      toast({ title: "Запись добавлена" });
+      setShowDialog(false);
     },
   });
 
-  const deleteMutation = useMutation({
-    mutationFn: (id: number) => apiReq(`/api/salaries/${id}`, "DELETE", token),
+  const updateMut = useMutation({
+    mutationFn: ({ id, data }: { id: number; data: any }) =>
+      apiRequest("PUT", `/api/salaries/${id}`, data),
     onSuccess: () => {
-      qc.invalidateQueries({ queryKey: ["/api/salaries"] });
-      qc.invalidateQueries({ queryKey: ["/api/salaries/totals"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/salaries"] });
+      toast({ title: "Запись обновлена" });
+      setShowDialog(false);
+    },
+  });
+
+  const deleteMut = useMutation({
+    mutationFn: (id: number) => apiRequest("DELETE", `/api/salaries/${id}`),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/salaries"] });
       toast({ title: "Запись удалена" });
     },
   });
 
-  const fmt = (n: number) => n.toLocaleString("ru") + " ₽";
-
-  return (
-    <div className="bg-card border border-border rounded-xl overflow-hidden">
-      {/* Header */}
-      <div className="p-4 bg-muted/30 border-b border-border flex items-center justify-between gap-3">
-        <div>
-          <p className="font-semibold">{master.displayName}</p>
-          <p className="text-xs text-muted-foreground">@{master.username}</p>
-        </div>
-        <div className="text-right">
-          <p className="text-2xl font-bold">{fmt(totals?.total ?? 0)}</p>
-          <p className="text-xs text-muted-foreground">итого за период</p>
-        </div>
-      </div>
-
-      {/* Stats row */}
-      {(totals?.total ?? 0) > 0 && (
-        <div className="grid grid-cols-2 gap-px bg-border">
-          <div className="bg-card p-3 text-center">
-            <p className="text-sm font-semibold text-green-600 dark:text-green-400">{fmt(totals?.paid ?? 0)}</p>
-            <p className="text-xs text-muted-foreground">выплачено</p>
-          </div>
-          <div className="bg-card p-3 text-center">
-            <p className={`text-sm font-semibold ${(totals?.debt ?? 0) > 0 ? "text-red-600 dark:text-red-400" : "text-muted-foreground"}`}>{fmt(totals?.debt ?? 0)}</p>
-            <p className="text-xs text-muted-foreground">долг</p>
-          </div>
-        </div>
-      )}
-
-      {/* Rows */}
-      {rows.length > 0 && (
-        <div className="divide-y divide-border">
-          {rows.map((row: any) => {
-            const typeInfo = SALARY_TYPES.find(t => t.value === row.type);
-            return (
-              <div key={row.id} className="px-4 py-3 flex items-center justify-between gap-3">
-                <div className="flex items-center gap-3 min-w-0">
-                  <button
-                    onClick={() => paidMutation.mutate({ id: row.id, paid: !row.paid })}
-                    className="shrink-0 transition-colors"
-                    title={row.paid ? "Отметить как невыплаченное" : "Отметить как выплаченное"}
-                  >
-                    {row.paid
-                      ? <CheckCircle2 className="w-5 h-5 text-green-600 dark:text-green-400" />
-                      : <Circle className="w-5 h-5 text-muted-foreground hover:text-green-600" />}
-                  </button>
-                  <div className="min-w-0">
-                    <div className="flex items-center gap-2 flex-wrap">
-                      <span className={`text-xs px-1.5 py-0.5 rounded-full font-medium ${typeInfo?.color}`}>{typeInfo?.label}</span>
-                      {row.description && <span className="text-sm truncate">{row.description}</span>}
-                    </div>
-                    <p className="text-xs text-muted-foreground mt-0.5">
-                      {row.date} · {{ cash: "Наличные", card: "Карта", transfer: "Перевод" }[row.paymentMethod as string] || row.paymentMethod}
-                    </p>
-                  </div>
-                </div>
-                <div className="flex items-center gap-3 shrink-0">
-                  <span className={`font-semibold ${row.type === "penalty" ? "text-red-600 dark:text-red-400" : "text-foreground"}`}>
-                    {row.type === "penalty" ? "−" : "+"}{fmt(row.amount)}
-                  </span>
-                  <button onClick={() => deleteMutation.mutate(row.id)} className="text-muted-foreground hover:text-destructive transition-colors">
-                    <Trash2 className="w-4 h-4" />
-                  </button>
-                </div>
-              </div>
-            );
-          })}
-        </div>
-      )}
-
-      {rows.length === 0 && (
-        <div className="p-4 text-sm text-muted-foreground text-center">Начислений нет за этот период</div>
-      )}
-    </div>
-  );
-}
-
-// ─── Main ─────────────────────────────────────────────────────────────────────
-export default function SalaryPage() {
-  const { token, user } = useAuth();
-  const qc = useQueryClient();
-  const { toast } = useToast();
-  const [periodOffset, setPeriodOffset] = useState(0);
-  const period = getPeriod(periodOffset);
-  const [formOpen, setFormOpen] = useState(false);
-  const [form, setForm] = useState({
-    masterId: "",
-    type: "salary",
-    amount: "",
-    description: "",
-    paymentMethod: "cash",
-    date: new Date().toISOString().slice(0, 10),
-  });
-
-  const isAdmin = user?.role === "admin";
-
-  const { data: masters = [] } = useQuery<any[]>({
-    queryKey: ["/api/admin/users"],
-    queryFn: () => fetch("/api/admin/users", { headers: { Authorization: `Bearer ${token}` } }).then(r => r.json()),
-  });
-
-  const masterUsers = masters.filter((u: any) => u.role === "master");
-
-  const createMutation = useMutation({
-    mutationFn: (data: any) => apiReq("/api/salaries", "POST", token!, data),
+  const markPaidMut = useMutation({
+    mutationFn: ({ id, paid }: { id: number; paid: number }) =>
+      apiRequest("PUT", `/api/salaries/${id}`, { paid }),
     onSuccess: () => {
-      qc.invalidateQueries({ queryKey: ["/api/salaries"] });
-      qc.invalidateQueries({ queryKey: ["/api/salaries/totals"] });
-      setFormOpen(false);
-      setForm({ masterId: "", type: "salary", amount: "", description: "", paymentMethod: "cash", date: new Date().toISOString().slice(0, 10) });
-      toast({ title: "Начисление добавлено" });
+      queryClient.invalidateQueries({ queryKey: ["/api/salaries"] });
     },
-    onError: () => toast({ title: "Ошибка", variant: "destructive" }),
   });
 
-  const handleSubmit = (e: React.FormEvent) => {
-    e.preventDefault();
-    const master = masters.find((m: any) => String(m.id) === form.masterId);
-    if (!master) { toast({ title: "Выберите мастера", variant: "destructive" }); return; }
-    createMutation.mutate({
-      ...form,
-      masterId: parseInt(form.masterId),
-      masterName: master.displayName,
-      amount: parseFloat(form.amount),
-      period,
+  function openCreate() {
+    setEditItem(null);
+    setForm({
+      masterId: masters[0]?.id.toString() ?? "",
+      masterName: masters[0]?.displayName ?? "",
+      type: "salary",
+      amount: "",
+      description: "",
+      period: "",
+      paymentMethod: "cash",
+      paid: false,
+      date: new Date().toISOString().slice(0, 10),
     });
-  };
+    setShowDialog(true);
+  }
+
+  function openEdit(s: Salary) {
+    setEditItem(s);
+    setForm({
+      masterId: s.masterId.toString(),
+      masterName: s.masterName,
+      type: s.type,
+      amount: s.amount.toString(),
+      description: s.description ?? "",
+      period: s.period ?? "",
+      paymentMethod: s.paymentMethod ?? "cash",
+      paid: !!s.paid,
+      date: s.date,
+    });
+    setShowDialog(true);
+  }
+
+  function handleMasterChange(id: string) {
+    const master = users.find((u) => u.id.toString() === id);
+    setForm((f) => ({ ...f, masterId: id, masterName: master?.displayName ?? "" }));
+  }
+
+  function handleSubmit() {
+    if (!form.masterId || !form.amount) {
+      toast({ title: "Заполните мастера и сумму", variant: "destructive" });
+      return;
+    }
+    const payload = {
+      masterId: parseInt(form.masterId),
+      masterName: form.masterName,
+      type: form.type,
+      amount: parseFloat(form.amount),
+      description: form.description || null,
+      period: form.period || null,
+      paymentMethod: form.paymentMethod,
+      paid: form.paid ? 1 : 0,
+      date: form.date,
+    };
+    if (editItem) {
+      updateMut.mutate({ id: editItem.id, data: payload });
+    } else {
+      createMut.mutate(payload);
+    }
+  }
+
+  const totalSalary = salaries
+    .filter((s) => s.type === "salary")
+    .reduce((sum, s) => sum + s.amount, 0);
+  const totalBonus = salaries
+    .filter((s) => s.type === "bonus")
+    .reduce((sum, s) => sum + s.amount, 0);
+  const totalPenalty = salaries
+    .filter((s) => s.type === "penalty")
+    .reduce((sum, s) => sum + s.amount, 0);
 
   return (
-    <div className="p-4 md:p-6 max-w-4xl mx-auto">
-      <div className="flex items-center justify-between mb-4">
-        <h1 className="text-xl font-bold">Зарплата мастеров</h1>
+    <div className="p-4 md:p-6 max-w-6xl mx-auto">
+      {/* Header */}
+      <div className="flex items-center justify-between mb-6">
+        <div>
+          <h1 className="text-xl font-bold text-foreground">Зарплата мастеров</h1>
+          <p className="text-sm text-muted-foreground mt-0.5">
+            Начисления, премии и штрафы
+          </p>
+        </div>
         {isAdmin && (
-          <Button onClick={() => setFormOpen(true)} className="gap-2">
-            <Plus className="w-4 h-4" />Начислить
+          <Button onClick={openCreate} size="sm" className="gap-1.5">
+            <Plus className="w-4 h-4" />
+            Добавить запись
           </Button>
         )}
       </div>
 
-      {/* Period navigation */}
-      <div className="flex items-center gap-3 mb-6">
-        <button onClick={() => setPeriodOffset(o => o - 1)} className="px-3 py-1.5 rounded-lg bg-muted hover:bg-muted/80 text-sm font-medium transition-colors">←</button>
-        <span className="text-base font-semibold min-w-32 text-center">{formatPeriod(period)}</span>
-        <button onClick={() => setPeriodOffset(o => o + 1)} disabled={periodOffset >= 0} className="px-3 py-1.5 rounded-lg bg-muted hover:bg-muted/80 text-sm font-medium transition-colors disabled:opacity-40">→</button>
-        {periodOffset !== 0 && (
-          <button onClick={() => setPeriodOffset(0)} className="text-xs text-muted-foreground hover:text-foreground underline">Сегодня</button>
+      {/* Stats cards */}
+      <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mb-5">
+        <div className="bg-card border border-border rounded-lg p-4">
+          <div className="flex items-center gap-2 text-muted-foreground text-xs mb-1">
+            <Wallet className="w-3.5 h-3.5" />
+            К выплате
+          </div>
+          <div className="text-lg font-bold text-foreground">{fmt(stats?.unpaid ?? 0)}</div>
+        </div>
+        <div className="bg-card border border-border rounded-lg p-4">
+          <div className="flex items-center gap-2 text-muted-foreground text-xs mb-1">
+            <CheckCircle2 className="w-3.5 h-3.5 text-green-500" />
+            Выплачено
+          </div>
+          <div className="text-lg font-bold text-green-600 dark:text-green-400">{fmt(stats?.paid ?? 0)}</div>
+        </div>
+        <div className="bg-card border border-border rounded-lg p-4">
+          <div className="flex items-center gap-2 text-muted-foreground text-xs mb-1">
+            <TrendingUp className="w-3.5 h-3.5 text-blue-500" />
+            Зарплата + Премии
+          </div>
+          <div className="text-lg font-bold text-blue-600 dark:text-blue-400">{fmt(totalSalary + totalBonus)}</div>
+        </div>
+        <div className="bg-card border border-border rounded-lg p-4">
+          <div className="flex items-center gap-2 text-muted-foreground text-xs mb-1">
+            <TrendingDown className="w-3.5 h-3.5 text-red-500" />
+            Штрафы
+          </div>
+          <div className="text-lg font-bold text-red-600 dark:text-red-400">{fmt(totalPenalty)}</div>
+        </div>
+      </div>
+
+      {/* Filters */}
+      <div className="flex flex-wrap gap-2 mb-4">
+        <Select value={filterMasterId} onValueChange={setFilterMasterId}>
+          <SelectTrigger className="w-44 h-8 text-sm">
+            <SelectValue placeholder="Все мастера" />
+          </SelectTrigger>
+          <SelectContent>
+            <SelectItem value="all">Все мастера</SelectItem>
+            {masters.map((m) => (
+              <SelectItem key={m.id} value={m.id.toString()}>
+                {m.displayName}
+              </SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
+        <Input
+          type="date"
+          value={filterFrom}
+          onChange={(e) => setFilterFrom(e.target.value)}
+          className="w-36 h-8 text-sm"
+          placeholder="От"
+        />
+        <Input
+          type="date"
+          value={filterTo}
+          onChange={(e) => setFilterTo(e.target.value)}
+          className="w-36 h-8 text-sm"
+          placeholder="До"
+        />
+        {(filterMasterId !== "all" || filterFrom || filterTo) && (
+          <Button
+            variant="ghost"
+            size="sm"
+            onClick={() => { setFilterMasterId("all"); setFilterFrom(""); setFilterTo(""); }}
+            className="h-8 text-xs"
+          >
+            Сбросить
+          </Button>
         )}
       </div>
 
-      {/* Master cards */}
-      {masterUsers.length === 0 ? (
-        <div className="text-center py-12 text-muted-foreground">
-          <Banknote className="w-12 h-12 mx-auto mb-3 opacity-30" />
-          <p>Мастеров нет. Добавьте пользователей с ролью "мастер" в Админ-панели.</p>
-        </div>
-      ) : (
-        <div className="space-y-4">
-          {masterUsers.map((master: any) => (
-            <MasterCard key={master.id} master={master} period={period} token={token!} />
-          ))}
-        </div>
-      )}
+      {/* Table */}
+      <div className="bg-card border border-border rounded-lg overflow-hidden">
+        <Table>
+          <TableHeader>
+            <TableRow>
+              <TableHead>Мастер</TableHead>
+              <TableHead>Тип</TableHead>
+              <TableHead>Сумма</TableHead>
+              <TableHead className="hidden md:table-cell">Период</TableHead>
+              <TableHead className="hidden md:table-cell">Описание</TableHead>
+              <TableHead>Способ</TableHead>
+              <TableHead>Статус</TableHead>
+              <TableHead className="hidden md:table-cell">Дата</TableHead>
+              {isAdmin && <TableHead className="w-20">Действия</TableHead>}
+            </TableRow>
+          </TableHeader>
+          <TableBody>
+            {isLoading ? (
+              <TableRow>
+                <TableCell colSpan={9} className="text-center py-8 text-muted-foreground">
+                  Загрузка...
+                </TableCell>
+              </TableRow>
+            ) : salaries.length === 0 ? (
+              <TableRow>
+                <TableCell colSpan={9} className="text-center py-12 text-muted-foreground">
+                  <Wallet className="w-10 h-10 mx-auto mb-2 opacity-20" />
+                  Записей нет
+                </TableCell>
+              </TableRow>
+            ) : (
+              salaries.map((s) => (
+                <TableRow
+                  key={s.id}
+                  className="cursor-pointer hover:bg-muted/50"
+                  onClick={() => isAdmin && openEdit(s)}
+                >
+                  <TableCell className="font-medium">{s.masterName}</TableCell>
+                  <TableCell>
+                    <span className={`inline-flex items-center px-2 py-0.5 rounded text-xs font-medium ${TYPE_COLORS[s.type]}`}>
+                      {TYPE_LABELS[s.type] ?? s.type}
+                    </span>
+                  </TableCell>
+                  <TableCell className={`font-semibold ${s.type === "penalty" ? "text-red-600 dark:text-red-400" : "text-foreground"}`}>
+                    {s.type === "penalty" ? "−" : "+"}{fmt(s.amount)}
+                  </TableCell>
+                  <TableCell className="hidden md:table-cell text-muted-foreground text-sm">
+                    {s.period ?? "—"}
+                  </TableCell>
+                  <TableCell className="hidden md:table-cell text-muted-foreground text-sm max-w-[160px] truncate">
+                    {s.description ?? "—"}
+                  </TableCell>
+                  <TableCell className="text-sm text-muted-foreground">
+                    {METHOD_LABELS[s.paymentMethod ?? "cash"] ?? s.paymentMethod}
+                  </TableCell>
+                  <TableCell onClick={(e) => e.stopPropagation()}>
+                    {isAdmin ? (
+                      <button
+                        onClick={() => markPaidMut.mutate({ id: s.id, paid: s.paid ? 0 : 1 })}
+                        className={`inline-flex items-center gap-1 px-2 py-0.5 rounded text-xs font-medium transition-colors ${
+                          s.paid
+                            ? "bg-green-100 text-green-700 hover:bg-green-200 dark:bg-green-900/30 dark:text-green-400"
+                            : "bg-yellow-100 text-yellow-700 hover:bg-yellow-200 dark:bg-yellow-900/30 dark:text-yellow-400"
+                        }`}
+                      >
+                        {s.paid ? <CheckCircle2 className="w-3 h-3" /> : <Clock className="w-3 h-3" />}
+                        {s.paid ? "Выплачено" : "Ожидает"}
+                      </button>
+                    ) : (
+                      <span className={`inline-flex items-center gap-1 px-2 py-0.5 rounded text-xs font-medium ${
+                        s.paid
+                          ? "bg-green-100 text-green-700 dark:bg-green-900/30 dark:text-green-400"
+                          : "bg-yellow-100 text-yellow-700 dark:bg-yellow-900/30 dark:text-yellow-400"
+                      }`}>
+                        {s.paid ? "Выплачено" : "Ожидает"}
+                      </span>
+                    )}
+                  </TableCell>
+                  <TableCell className="hidden md:table-cell text-muted-foreground text-sm">
+                    {fmtDate(s.date)}
+                  </TableCell>
+                  {isAdmin && (
+                    <TableCell onClick={(e) => e.stopPropagation()}>
+                      <Button
+                        variant="ghost"
+                        size="icon"
+                        className="h-7 w-7 text-muted-foreground hover:text-red-500"
+                        onClick={() => deleteMut.mutate(s.id)}
+                      >
+                        <Trash2 className="w-3.5 h-3.5" />
+                      </Button>
+                    </TableCell>
+                  )}
+                </TableRow>
+              ))
+            )}
+          </TableBody>
+        </Table>
+      </div>
 
-      {/* Form */}
-      <Dialog open={formOpen} onOpenChange={setFormOpen}>
+      {/* Dialog */}
+      <Dialog open={showDialog} onOpenChange={setShowDialog}>
         <DialogContent className="max-w-md">
-          <DialogHeader><DialogTitle>Начисление за {formatPeriod(period)}</DialogTitle></DialogHeader>
-          <form onSubmit={handleSubmit} className="space-y-4">
+          <DialogHeader>
+            <DialogTitle>{editItem ? "Редактировать запись" : "Добавить запись"}</DialogTitle>
+          </DialogHeader>
+          <div className="space-y-3">
             <div>
-              <label className="text-sm font-medium mb-1 block">Мастер *</label>
-              <Select value={form.masterId} onValueChange={v => setForm(f => ({ ...f, masterId: v }))}>
-                <SelectTrigger><SelectValue placeholder="Выберите мастера" /></SelectTrigger>
+              <label className="text-sm font-medium text-foreground mb-1 block">Мастер</label>
+              <Select value={form.masterId} onValueChange={handleMasterChange}>
+                <SelectTrigger>
+                  <SelectValue placeholder="Выберите мастера" />
+                </SelectTrigger>
                 <SelectContent>
-                  {masterUsers.map((m: any) => <SelectItem key={m.id} value={String(m.id)}>{m.displayName}</SelectItem>)}
+                  {users.map((u) => (
+                    <SelectItem key={u.id} value={u.id.toString()}>
+                      {u.displayName} ({u.role === "admin" ? "Администратор" : "Мастер"})
+                    </SelectItem>
+                  ))}
                 </SelectContent>
               </Select>
             </div>
+
             <div>
-              <label className="text-sm font-medium mb-1 block">Тип *</label>
-              <div className="flex gap-2">
-                {SALARY_TYPES.map(t => (
-                  <button key={t.value} type="button"
-                    onClick={() => setForm(f => ({ ...f, type: t.value }))}
-                    className={`flex-1 py-2 rounded-lg text-sm font-medium border transition-colors ${form.type === t.value ? t.color + " border-transparent" : "border-border hover:bg-muted"}`}>
-                    {t.label}
-                  </button>
-                ))}
-              </div>
-            </div>
-            <div>
-              <label className="text-sm font-medium mb-1 block">Сумма (₽) *</label>
-              <Input type="number" min="0.01" step="0.01" value={form.amount} onChange={e => setForm(f => ({ ...f, amount: e.target.value }))} required />
-            </div>
-            <div>
-              <label className="text-sm font-medium mb-1 block">Описание</label>
-              <Input value={form.description} onChange={e => setForm(f => ({ ...f, description: e.target.value }))} placeholder="За что начислено..." />
-            </div>
-            <div>
-              <label className="text-sm font-medium mb-1 block">Способ выплаты</label>
-              <Select value={form.paymentMethod} onValueChange={v => setForm(f => ({ ...f, paymentMethod: v }))}>
-                <SelectTrigger><SelectValue /></SelectTrigger>
-                <SelectContent>{PAYMENT_METHODS.map(m => <SelectItem key={m.value} value={m.value}>{m.label}</SelectItem>)}</SelectContent>
+              <label className="text-sm font-medium text-foreground mb-1 block">Тип</label>
+              <Select value={form.type} onValueChange={(v) => setForm((f) => ({ ...f, type: v }))}>
+                <SelectTrigger>
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="salary">Зарплата</SelectItem>
+                  <SelectItem value="bonus">Премия</SelectItem>
+                  <SelectItem value="penalty">Штраф</SelectItem>
+                </SelectContent>
               </Select>
             </div>
+
             <div>
-              <label className="text-sm font-medium mb-1 block">Дата</label>
-              <Input type="date" value={form.date} onChange={e => setForm(f => ({ ...f, date: e.target.value }))} />
+              <label className="text-sm font-medium text-foreground mb-1 block">Сумма (₽)</label>
+              <Input
+                type="number"
+                min="0"
+                value={form.amount}
+                onChange={(e) => setForm((f) => ({ ...f, amount: e.target.value }))}
+                placeholder="0"
+              />
             </div>
-            <div className="flex gap-2 pt-1">
-              <Button type="submit" disabled={createMutation.isPending || !form.masterId || !form.amount} className="flex-1">
-                {createMutation.isPending ? "Сохраняем..." : "Начислить"}
-              </Button>
-              <Button type="button" variant="outline" onClick={() => setFormOpen(false)}>Отмена</Button>
+
+            <div>
+              <label className="text-sm font-medium text-foreground mb-1 block">Период (например: Июнь 2026)</label>
+              <Input
+                value={form.period}
+                onChange={(e) => setForm((f) => ({ ...f, period: e.target.value }))}
+                placeholder="Июнь 2026"
+              />
             </div>
-          </form>
+
+            <div>
+              <label className="text-sm font-medium text-foreground mb-1 block">Описание</label>
+              <Textarea
+                value={form.description}
+                onChange={(e) => setForm((f) => ({ ...f, description: e.target.value }))}
+                placeholder="Примечание..."
+                rows={2}
+              />
+            </div>
+
+            <div className="grid grid-cols-2 gap-3">
+              <div>
+                <label className="text-sm font-medium text-foreground mb-1 block">Способ выплаты</label>
+                <Select
+                  value={form.paymentMethod}
+                  onValueChange={(v) => setForm((f) => ({ ...f, paymentMethod: v }))}
+                >
+                  <SelectTrigger>
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="cash">Наличные</SelectItem>
+                    <SelectItem value="card">Карта</SelectItem>
+                    <SelectItem value="transfer">Перевод</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
+              <div>
+                <label className="text-sm font-medium text-foreground mb-1 block">Дата</label>
+                <Input
+                  type="date"
+                  value={form.date}
+                  onChange={(e) => setForm((f) => ({ ...f, date: e.target.value }))}
+                />
+              </div>
+            </div>
+
+            <div className="flex items-center gap-2">
+              <input
+                type="checkbox"
+                id="paid-check"
+                checked={form.paid}
+                onChange={(e) => setForm((f) => ({ ...f, paid: e.target.checked }))}
+                className="w-4 h-4 rounded border-border"
+              />
+              <label htmlFor="paid-check" className="text-sm text-foreground cursor-pointer">
+                Выплачено
+              </label>
+            </div>
+          </div>
+          <DialogFooter className="gap-2">
+            <Button variant="outline" onClick={() => setShowDialog(false)}>
+              Отмена
+            </Button>
+            <Button
+              onClick={handleSubmit}
+              disabled={createMut.isPending || updateMut.isPending}
+            >
+              {editItem ? "Сохранить" : "Добавить"}
+            </Button>
+          </DialogFooter>
         </DialogContent>
       </Dialog>
     </div>

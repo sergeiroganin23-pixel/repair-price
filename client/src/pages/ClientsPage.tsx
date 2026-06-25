@@ -1,141 +1,267 @@
 import { useState } from "react";
-import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
-import { useAuth } from "@/lib/auth";
-import { useToast } from "@/hooks/use-toast";
+import { useQuery, useMutation } from "@tanstack/react-query";
+import { queryClient, apiRequest } from "@/lib/queryClient";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { Card, CardContent, CardHeader } from "@/components/ui/card";
+import { Badge } from "@/components/ui/badge";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
-import { Plus, Search, X, ChevronDown, ChevronUp, Phone, Mail, StickyNote } from "lucide-react";
+import { Label } from "@/components/ui/label";
+import { Textarea } from "@/components/ui/textarea";
+import { useToast } from "@/hooks/use-toast";
+import { Phone, User, Search, Plus, Wrench, Calendar, Pencil, ChevronRight } from "lucide-react";
+import type { Client, Repair } from "@shared/schema";
 
-function apiReq(url: string, method: string, token: string, body?: any) {
-  return fetch(url, { method, headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` }, body: body ? JSON.stringify(body) : undefined }).then(r => r.json());
+const STATUS_LABELS: Record<string, string> = {
+  новая: "Новая", в_работе: "В работе", готово: "Готово", отказ: "Отказ", записал: "Записал",
+};
+const STATUS_COLORS: Record<string, string> = {
+  новая: "bg-blue-500 text-white", в_работе: "bg-yellow-500 text-white",
+  готово: "bg-green-600 text-white", отказ: "bg-red-500 text-white", записал: "bg-purple-500 text-white",
+};
+
+function formatDate(iso: string) {
+  try { return new Date(iso).toLocaleDateString("ru-RU"); } catch { return iso; }
 }
 
-export default function ClientsPage() {
-  const { token } = useAuth();
-  const qc = useQueryClient();
+// ─── Форма клиента ─────────────────────────────────────────────────────────────
+function ClientForm({ client, onClose }: { client?: Client; onClose: () => void }) {
   const { toast } = useToast();
-  const [search, setSearch] = useState("");
-  const [formOpen, setFormOpen] = useState(false);
-  const [expanded, setExpanded] = useState<number | null>(null);
-  const [form, setForm] = useState({ name: "", phone: "", email: "", notes: "" });
-
-  const { data: clients = [], isLoading } = useQuery<any[]>({
-    queryKey: ["/api/clients"],
-    queryFn: () => fetch("/api/clients", { headers: { Authorization: `Bearer ${token}` } }).then(r => r.json()),
+  const [form, setForm] = useState({
+    name: client?.name || "",
+    phone: client?.phone || "",
+    email: client?.email || "",
+    notes: client?.notes || "",
   });
 
-  const { data: repairs = [] } = useQuery<any[]>({
-    queryKey: ["/api/repairs"],
-    queryFn: () => fetch("/api/repairs", { headers: { Authorization: `Bearer ${token}` } }).then(r => r.ok ? r.json() : []),
-    retry: false,
-  });
-
-  const createMutation = useMutation({
-    mutationFn: (data: any) => apiReq("/api/clients", "POST", token!, data),
-    onSuccess: () => {
-      qc.invalidateQueries({ queryKey: ["/api/clients"] });
-      setFormOpen(false);
-      setForm({ name: "", phone: "", email: "", notes: "" });
-      toast({ title: "Клиент добавлен" });
+  const mutation = useMutation({
+    mutationFn: async () => {
+      if (client) {
+        return apiRequest("PUT", `/api/clients/${client.id}`, form).then(r => r.json());
+      }
+      return apiRequest("POST", "/api/clients", form).then(r => r.json());
     },
-    onError: () => toast({ title: "Ошибка", variant: "destructive" }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/clients"] });
+      toast({ title: client ? "Клиент обновлён" : "Клиент добавлен" });
+      onClose();
+    },
+    onError: (e: any) => toast({ title: "Ошибка", description: e.message, variant: "destructive" }),
   });
-
-  const filtered = clients.filter(c => {
-    if (!search) return true;
-    const s = search.toLowerCase();
-    return c.name.toLowerCase().includes(s) || (c.phone || "").includes(s) || (c.email || "").toLowerCase().includes(s);
-  });
-
-  const getClientRepairs = (clientId: number) => repairs.filter((r: any) => r.clientId === clientId);
-  const getClientTotal = (clientId: number) => getClientRepairs(clientId).reduce((sum: number, r: any) => sum + (r.finalPrice || r.estimatedPrice || 0), 0);
-
-  if (isLoading) return <div className="p-8 text-center text-muted-foreground">Загрузка...</div>;
 
   return (
-    <div className="p-4 md:p-6 max-w-4xl mx-auto">
-      <h1 className="text-xl font-bold mb-4">Клиенты</h1>
-      <div className="flex gap-2 mb-4">
-        <div className="relative flex-1">
-          <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" />
-          <Input className="pl-9" placeholder="Поиск по имени, телефону..." value={search} onChange={e => setSearch(e.target.value)} />
-          {search && <button className="absolute right-3 top-1/2 -translate-y-1/2" onClick={() => setSearch("")}><X className="w-4 h-4 text-muted-foreground" /></button>}
+    <div className="space-y-4">
+      <div className="grid grid-cols-2 gap-3">
+        <div className="space-y-1.5">
+          <Label>Имя *</Label>
+          <Input value={form.name} onChange={e => setForm(p => ({ ...p, name: e.target.value }))} placeholder="Иван Петров" />
         </div>
-        <Button onClick={() => setFormOpen(true)} className="gap-2 shrink-0"><Plus className="w-4 h-4" />Добавить</Button>
+        <div className="space-y-1.5">
+          <Label>Телефон *</Label>
+          <Input value={form.phone} onChange={e => setForm(p => ({ ...p, phone: e.target.value }))} placeholder="+7 999 000 00 00" />
+        </div>
+      </div>
+      <div className="space-y-1.5">
+        <Label>Email</Label>
+        <Input value={form.email} onChange={e => setForm(p => ({ ...p, email: e.target.value }))} placeholder="email@example.com" type="email" />
+      </div>
+      <div className="space-y-1.5">
+        <Label>Примечания</Label>
+        <Textarea value={form.notes} onChange={e => setForm(p => ({ ...p, notes: e.target.value }))} rows={2} placeholder="Дополнительная информация..." />
+      </div>
+      <div className="flex gap-2 justify-end pt-2">
+        <Button variant="outline" onClick={onClose}>Отмена</Button>
+        <Button onClick={() => mutation.mutate()} disabled={mutation.isPending || !form.name || !form.phone}>
+          {mutation.isPending ? "Сохраняю..." : "Сохранить"}
+        </Button>
+      </div>
+    </div>
+  );
+}
+
+// ─── Карточка клиента ──────────────────────────────────────────────────────────
+function ClientDetailModal({ client, onClose }: { client: Client; onClose: () => void }) {
+  const { data: repairs = [] } = useQuery<Repair[]>({
+    queryKey: ["/api/clients", client.id, "repairs"],
+    queryFn: () => apiRequest("GET", `/api/clients/${client.id}/repairs`).then(r => r.json()),
+  });
+
+  const totalSpent = repairs.filter(r => r.status === "готово").reduce((sum, r) => sum + (r.finalPrice || r.estimatedPrice || 0), 0);
+  const [editing, setEditing] = useState(false);
+
+  return (
+    <DialogContent className="max-w-2xl max-h-[90vh] overflow-y-auto">
+      <DialogHeader>
+        <DialogTitle className="flex items-center gap-2">
+          <User className="w-5 h-5" />
+          {client.name}
+        </DialogTitle>
+      </DialogHeader>
+
+      {editing ? (
+        <ClientForm client={client} onClose={() => setEditing(false)} />
+      ) : (
+        <div className="space-y-4">
+          {/* Контакты */}
+          <div className="grid grid-cols-2 gap-3 text-sm">
+            <div className="flex items-center gap-2">
+              <Phone className="w-4 h-4 text-muted-foreground" />
+              <a href={`tel:${client.phone}`} className="text-primary hover:underline font-medium">{client.phone}</a>
+            </div>
+            {client.email && (
+              <div className="flex items-center gap-2">
+                <span className="text-muted-foreground text-xs">Email:</span>
+                <span>{client.email}</span>
+              </div>
+            )}
+            <div className="flex items-center gap-2">
+              <Calendar className="w-4 h-4 text-muted-foreground" />
+              <span className="text-muted-foreground">С {formatDate(client.createdAt)}</span>
+            </div>
+            <div className="flex items-center gap-2">
+              <Wrench className="w-4 h-4 text-muted-foreground" />
+              <span>Ремонтов: <strong>{repairs.length}</strong></span>
+            </div>
+          </div>
+
+          {totalSpent > 0 && (
+            <div className="bg-green-50 dark:bg-green-900/20 rounded-lg p-3 text-sm">
+              Итого потрачено: <strong className="text-green-700 dark:text-green-400">{totalSpent.toLocaleString("ru-RU")} ₽</strong>
+            </div>
+          )}
+
+          {client.notes && (
+            <div className="text-sm text-muted-foreground bg-muted/50 rounded p-2">{client.notes}</div>
+          )}
+
+          <Button variant="outline" size="sm" onClick={() => setEditing(true)} className="gap-1.5">
+            <Pencil className="w-3.5 h-3.5" /> Редактировать
+          </Button>
+
+          {/* История ремонтов */}
+          <div>
+            <h3 className="font-medium text-sm mb-2">История ремонтов ({repairs.length})</h3>
+            {repairs.length === 0 ? (
+              <p className="text-sm text-muted-foreground">Ремонтов пока нет</p>
+            ) : (
+              <div className="space-y-2">
+                {repairs.map(r => (
+                  <div key={r.id} className="border rounded-lg p-3 text-sm">
+                    <div className="flex items-center justify-between gap-2 flex-wrap">
+                      <div className="flex items-center gap-2">
+                        <span className={`px-2 py-0.5 rounded-full text-xs font-medium ${STATUS_COLORS[r.status] || "bg-muted"}`}>
+                          {STATUS_LABELS[r.status] || r.status}
+                        </span>
+                        <span className="font-medium">{[r.brand, r.model].filter(Boolean).join(" ") || r.deviceType || "Устройство"}</span>
+                      </div>
+                      <span className="text-muted-foreground text-xs">{formatDate(r.createdAt)}</span>
+                    </div>
+                    {r.issue && <p className="text-muted-foreground mt-1">{r.issue}</p>}
+                    {(r.finalPrice || r.estimatedPrice) && (
+                      <p className="font-medium text-green-600 dark:text-green-400 mt-1">
+                        {(r.finalPrice || r.estimatedPrice)?.toLocaleString("ru-RU")} ₽
+                      </p>
+                    )}
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        </div>
+      )}
+    </DialogContent>
+  );
+}
+
+// ─── Главная страница ──────────────────────────────────────────────────────────
+export default function ClientsPage() {
+  const [search, setSearch] = useState("");
+  const [addOpen, setAddOpen] = useState(false);
+  const [selectedClient, setSelectedClient] = useState<Client | null>(null);
+
+  const { data: clients = [], isLoading } = useQuery<Client[]>({
+    queryKey: search ? ["/api/clients", "search", search] : ["/api/clients"],
+    queryFn: () => apiRequest("GET", search ? `/api/clients?q=${encodeURIComponent(search)}` : "/api/clients").then(r => r.json()),
+  });
+
+  return (
+    <div className="max-w-5xl mx-auto px-4 py-6">
+      <div className="flex items-center justify-between mb-6 flex-wrap gap-3">
+        <div>
+          <h1 className="text-xl font-bold">Клиенты</h1>
+          <p className="text-sm text-muted-foreground mt-0.5">
+            {clients.length > 0 ? `${clients.length} клиентов` : "База клиентов пуста"}
+          </p>
+        </div>
+        <Button onClick={() => setAddOpen(true)} className="gap-1.5" data-testid="button-add-client">
+          <Plus className="w-4 h-4" /> Добавить клиента
+        </Button>
       </div>
 
-      {filtered.length === 0 ? (
-        <div className="text-center py-12 text-muted-foreground">{search ? "Ничего не найдено" : "Клиентов нет"}</div>
+      {/* Поиск */}
+      <div className="relative mb-4">
+        <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" />
+        <Input
+          className="pl-9"
+          placeholder="Поиск по имени или телефону..."
+          value={search}
+          onChange={e => setSearch(e.target.value)}
+          data-testid="input-search-clients"
+        />
+      </div>
+
+      {isLoading ? (
+        <div className="space-y-3">
+          {[1,2,3].map(i => <div key={i} className="h-16 bg-muted animate-pulse rounded-lg" />)}
+        </div>
+      ) : clients.length === 0 ? (
+        <div className="text-center py-20 text-muted-foreground">
+          <div className="text-4xl mb-3">👤</div>
+          <p className="font-medium">{search ? "Клиенты не найдены" : "Клиентов пока нет"}</p>
+          <p className="text-sm mt-1">Клиенты добавляются автоматически при создании заявки</p>
+        </div>
       ) : (
         <div className="space-y-2">
-          {filtered.map(client => {
-            const clientRepairs = getClientRepairs(client.id);
-            const total = getClientTotal(client.id);
-            const isExpanded = expanded === client.id;
-            return (
-              <div key={client.id} className="bg-card border border-border rounded-lg overflow-hidden">
-                <div className="p-4">
-                  <div className="flex items-start justify-between gap-3">
-                    <div className="min-w-0">
-                      <p className="font-semibold">{client.name}</p>
-                      <div className="flex flex-wrap gap-3 mt-1">
-                        {client.phone && <span className="flex items-center gap-1 text-sm text-muted-foreground"><Phone className="w-3 h-3" />{client.phone}</span>}
-                        {client.email && <span className="flex items-center gap-1 text-sm text-muted-foreground"><Mail className="w-3 h-3" />{client.email}</span>}
-                      </div>
-                      {client.notes && <p className="flex items-center gap-1 text-sm text-muted-foreground mt-1"><StickyNote className="w-3 h-3" />{client.notes}</p>}
-                    </div>
-                    <div className="text-right shrink-0">
-                      <p className="text-sm font-medium">{clientRepairs.length} ремонт{clientRepairs.length === 1 ? "" : clientRepairs.length < 5 ? "а" : "ов"}</p>
-                      {total > 0 && <p className="text-sm text-green-600 dark:text-green-400">{total.toLocaleString("ru")} ₽</p>}
-                    </div>
+          {clients.map(client => (
+            <Card
+              key={client.id}
+              className="cursor-pointer hover:border-primary/50 transition-colors"
+              onClick={() => setSelectedClient(client)}
+              data-testid={`card-client-${client.id}`}
+            >
+              <CardContent className="px-4 py-3 flex items-center justify-between gap-3">
+                <div className="flex items-center gap-3">
+                  <div className="w-9 h-9 rounded-full bg-primary/10 flex items-center justify-center shrink-0">
+                    <User className="w-4 h-4 text-primary" />
                   </div>
-                  {clientRepairs.length > 0 && (
-                    <button onClick={() => setExpanded(isExpanded ? null : client.id)} className="flex items-center gap-1 text-xs text-muted-foreground hover:text-foreground mt-2 transition-colors">
-                      {isExpanded ? <ChevronUp className="w-3 h-3" /> : <ChevronDown className="w-3 h-3" />}
-                      {isExpanded ? "Скрыть историю" : "История ремонтов"}
-                    </button>
-                  )}
+                  <div>
+                    <p className="font-medium text-sm">{client.name}</p>
+                    <p className="text-xs text-muted-foreground flex items-center gap-1">
+                      <Phone className="w-3 h-3" />{client.phone}
+                    </p>
+                  </div>
                 </div>
-                {isExpanded && clientRepairs.length > 0 && (
-                  <div className="border-t border-border bg-muted/30 divide-y divide-border">
-                    {clientRepairs.map((r: any) => (
-                      <div key={r.id} className="px-4 py-2.5 flex items-center justify-between gap-3">
-                        <div className="min-w-0">
-                          <p className="text-sm font-medium truncate">{r.brand} {r.model}</p>
-                          <p className="text-xs text-muted-foreground">{r.issue} · {new Date(r.createdAt).toLocaleDateString("ru")}</p>
-                        </div>
-                        <div className="text-right shrink-0">
-                          {(r.finalPrice || r.estimatedPrice) && (
-                            <p className="text-sm font-medium text-green-600 dark:text-green-400">{(r.finalPrice || r.estimatedPrice).toLocaleString("ru")} ₽</p>
-                          )}
-                          <span className={`text-xs px-1.5 py-0.5 rounded-full ${r.status === "готово" ? "bg-green-100 text-green-800 dark:bg-green-900 dark:text-green-200" : "bg-muted text-muted-foreground"}`}>{r.status}</span>
-                        </div>
-                      </div>
-                    ))}
-                  </div>
-                )}
-              </div>
-            );
-          })}
+                <ChevronRight className="w-4 h-4 text-muted-foreground shrink-0" />
+              </CardContent>
+            </Card>
+          ))}
         </div>
       )}
 
-      <Dialog open={formOpen} onOpenChange={setFormOpen}>
-        <DialogContent className="max-w-md">
+      {/* Диалог добавления */}
+      <Dialog open={addOpen} onOpenChange={setAddOpen}>
+        <DialogContent>
           <DialogHeader><DialogTitle>Новый клиент</DialogTitle></DialogHeader>
-          <form onSubmit={e => { e.preventDefault(); createMutation.mutate({ ...form, createdAt: new Date().toISOString() }); }} className="space-y-3">
-            <div><label className="text-sm font-medium mb-1 block">Имя *</label><Input value={form.name} onChange={e => setForm(f => ({ ...f, name: e.target.value }))} required /></div>
-            <div><label className="text-sm font-medium mb-1 block">Телефон</label><Input value={form.phone} onChange={e => setForm(f => ({ ...f, phone: e.target.value }))} /></div>
-            <div><label className="text-sm font-medium mb-1 block">Email</label><Input value={form.email} onChange={e => setForm(f => ({ ...f, email: e.target.value }))} /></div>
-            <div><label className="text-sm font-medium mb-1 block">Заметки</label><Input value={form.notes} onChange={e => setForm(f => ({ ...f, notes: e.target.value }))} /></div>
-            <div className="flex gap-2 pt-1">
-              <Button type="submit" disabled={createMutation.isPending} className="flex-1">{createMutation.isPending ? "Сохраняем..." : "Добавить"}</Button>
-              <Button type="button" variant="outline" onClick={() => setFormOpen(false)}>Отмена</Button>
-            </div>
-          </form>
+          <ClientForm onClose={() => setAddOpen(false)} />
         </DialogContent>
       </Dialog>
+
+      {/* Карточка клиента */}
+      {selectedClient && (
+        <Dialog open={!!selectedClient} onOpenChange={() => setSelectedClient(null)}>
+          <ClientDetailModal client={selectedClient} onClose={() => setSelectedClient(null)} />
+        </Dialog>
+      )}
     </div>
   );
 }
