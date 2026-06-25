@@ -24,8 +24,10 @@ import { apiRequest, queryClient } from "@/lib/queryClient";
 import type { Category, DeviceModel, Service, Supplier, ChangeRequest } from "@shared/schema";
 import {
   Plus, Pencil, Trash2, Loader2, Check, X, MessageSquare,
-  Smartphone, Wrench, Truck, Bell, UserPlus, Users,
+  Smartphone, Wrench, Truck, Bell, UserPlus, Users, FolderPlus, FolderOpen,
 } from "lucide-react";
+
+type Subcategory = { id: number; categoryId: number; name: string; sortOrder: number };
 
 // ─── Request Status Badge ─────────────────────────────────────────────────
 function StatusBadge({ status }: { status: string }) {
@@ -257,17 +259,25 @@ function CategoriesTab() {
   );
 }
 
-// ─── Models & Services Tab ────────────────────────────────────────────────
+// ─── Models & Services Tab ──────────────────────────────────────────────────
 function ModelsTab() {
   const { toast } = useToast();
   const [selectedCat, setSelectedCat] = useState<number | null>(null);
+  const [selectedSub, setSelectedSub] = useState<number | null>(null); // null = без подкатегории / все
   const [selectedModel, setSelectedModel] = useState<number | null>(null);
 
-  // Form states
+  // Subcategory form
+  const [showSubForm, setShowSubForm] = useState(false);
+  const [editSub, setEditSub] = useState<Subcategory | null>(null);
+  const [subName, setSubName] = useState("");
+
+  // Model form
   const [showModelForm, setShowModelForm] = useState(false);
   const [modelName, setModelName] = useState("");
+  const [modelSubId, setModelSubId] = useState<string>("none");
   const [editModel, setEditModel] = useState<DeviceModel | null>(null);
 
+  // Service form
   const [showSvcForm, setShowSvcForm] = useState(false);
   const [svcName, setSvcName] = useState("");
   const [svcPrice, setSvcPrice] = useState("");
@@ -275,19 +285,37 @@ function ModelsTab() {
   const [svcDuration, setSvcDuration] = useState("");
   const [editSvc, setEditSvc] = useState<Service | null>(null);
 
-  const [deleteTarget, setDeleteTarget] = useState<{type: "model"|"service"; id: number} | null>(null);
+  const [deleteTarget, setDeleteTarget] = useState<{type: "subcategory"|"model"|"service"; id: number} | null>(null);
 
   const { data: categories } = useQuery<Category[]>({ queryKey: ["/api/categories"] });
-  const { data: models, isLoading: loadingModels } = useQuery<DeviceModel[]>({
-    queryKey: ["/api/models", selectedCat],
+
+  const { data: subcats } = useQuery<Subcategory[]>({
+    queryKey: ["/api/subcategories", selectedCat],
     queryFn: async () => {
       if (!selectedCat) return [];
+      const res = await apiRequest("GET", `/api/subcategories?categoryId=${selectedCat}`);
+      if (!res.ok) throw new Error();
+      return res.json();
+    },
+    enabled: !!selectedCat,
+  });
+
+  const { data: models, isLoading: loadingModels } = useQuery<DeviceModel[]>({
+    queryKey: ["/api/models", selectedCat, selectedSub],
+    queryFn: async () => {
+      if (!selectedCat) return [];
+      if (selectedSub) {
+        const res = await apiRequest("GET", `/api/models?subcategoryId=${selectedSub}`);
+        if (!res.ok) throw new Error();
+        return res.json();
+      }
       const res = await apiRequest("GET", `/api/models?categoryId=${selectedCat}`);
       if (!res.ok) throw new Error();
       return res.json();
     },
     enabled: !!selectedCat,
   });
+
   const { data: svcList, isLoading: loadingSvc } = useQuery<Service[]>({
     queryKey: ["/api/services", selectedModel],
     queryFn: async () => {
@@ -299,16 +327,33 @@ function ModelsTab() {
     enabled: !!selectedModel,
   });
 
+  // Subcategory mutations
+  const subMutation = useMutation({
+    mutationFn: async () => {
+      const body = { categoryId: selectedCat, name: subName };
+      const res = await apiRequest(editSub ? "PUT" : "POST", editSub ? `/api/subcategories/${editSub.id}` : "/api/subcategories", body);
+      if (!res.ok) { const e = await res.json(); throw new Error(e.error); }
+      return res.json();
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/subcategories", selectedCat] });
+      setShowSubForm(false); setSubName(""); setEditSub(null);
+      toast({ title: "Готово" });
+    },
+    onError: (e: Error) => toast({ title: "Ошибка", description: e.message, variant: "destructive" }),
+  });
+
   const modelMutation = useMutation({
     mutationFn: async () => {
-      const body = { categoryId: selectedCat, name: modelName };
+      const subcategoryId = modelSubId !== "none" ? parseInt(modelSubId) : null;
+      const body = { categoryId: selectedCat, subcategoryId, name: modelName };
       const res = await apiRequest(editModel ? "PUT" : "POST", editModel ? `/api/models/${editModel.id}` : "/api/models", body);
       if (!res.ok) { const e = await res.json(); throw new Error(e.error); }
       return res.json();
     },
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["/api/models", selectedCat] });
-      setShowModelForm(false); setModelName(""); setEditModel(null);
+      queryClient.invalidateQueries({ queryKey: ["/api/models", selectedCat, selectedSub] });
+      setShowModelForm(false); setModelName(""); setModelSubId("none"); setEditModel(null);
       toast({ title: "Готово" });
     },
     onError: (e: Error) => toast({ title: "Ошибка", description: e.message, variant: "destructive" }),
@@ -332,11 +377,16 @@ function ModelsTab() {
   const deleteMutation = useMutation({
     mutationFn: async () => {
       if (!deleteTarget) return;
-      const url = deleteTarget.type === "model" ? `/api/models/${deleteTarget.id}` : `/api/services/${deleteTarget.id}`;
-      await apiRequest("DELETE", url);
+      const urlMap = {
+        subcategory: `/api/subcategories/${deleteTarget.id}`,
+        model: `/api/models/${deleteTarget.id}`,
+        service: `/api/services/${deleteTarget.id}`,
+      };
+      await apiRequest("DELETE", urlMap[deleteTarget.type]);
     },
     onSuccess: () => {
-      if (deleteTarget?.type === "model") queryClient.invalidateQueries({ queryKey: ["/api/models", selectedCat] });
+      if (deleteTarget?.type === "subcategory") queryClient.invalidateQueries({ queryKey: ["/api/subcategories", selectedCat] });
+      else if (deleteTarget?.type === "model") queryClient.invalidateQueries({ queryKey: ["/api/models", selectedCat, selectedSub] });
       else queryClient.invalidateQueries({ queryKey: ["/api/services", selectedModel] });
       setDeleteTarget(null);
       toast({ title: "Удалено" });
@@ -348,6 +398,13 @@ function ModelsTab() {
     setEditSvc(s); setSvcName(s.name); setSvcPrice(String(s.price)); setSvcPriceMax(s.priceMax ? String(s.priceMax) : ""); setSvcDuration(s.duration || ""); setShowSvcForm(true);
   }
 
+  // Filter models based on selected sub
+  const displayModels = models
+    ? (selectedSub
+        ? models.filter(m => m.subcategoryId === selectedSub)
+        : models.filter(m => !m.subcategoryId))
+    : [];
+
   return (
     <div className="space-y-4">
       {/* Category selector */}
@@ -355,92 +412,143 @@ function ModelsTab() {
         <Label className="text-xs text-muted-foreground mb-2 block">Категория</Label>
         <div className="flex flex-wrap gap-2">
           {categories?.map(cat => (
-            <Button
-              key={cat.id}
-              size="sm"
-              variant={selectedCat === cat.id ? "default" : "outline"}
-              onClick={() => { setSelectedCat(cat.id); setSelectedModel(null); }}
-            >{cat.name}</Button>
+            <Button key={cat.id} size="sm" variant={selectedCat === cat.id ? "default" : "outline"}
+              onClick={() => { setSelectedCat(cat.id); setSelectedSub(null); setSelectedModel(null); }}>
+              {cat.name}
+            </Button>
           ))}
         </div>
       </div>
 
       {selectedCat && (
-        <div className="grid md:grid-cols-2 gap-4">
-          {/* Models list */}
+        <>
+          {/* Subcategory row */}
           <div>
             <div className="flex justify-between items-center mb-2">
-              <Label className="text-xs text-muted-foreground">Модели</Label>
-              <Button size="sm" variant="outline" className="h-7 text-xs gap-1" onClick={() => { setEditModel(null); setModelName(""); setShowModelForm(true); }}>
+              <Label className="text-xs text-muted-foreground">Подкатегории</Label>
+              <Button size="sm" variant="outline" className="h-7 text-xs gap-1"
+                onClick={() => { setEditSub(null); setSubName(""); setShowSubForm(true); }}>
                 <Plus className="w-3 h-3" /> Добавить
               </Button>
             </div>
-            <div className="border border-border rounded-xl overflow-hidden max-h-80 overflow-y-auto">
-              {loadingModels ? <Skeleton className="h-32" /> : models?.map(m => (
-                <div
-                  key={m.id}
-                  onClick={() => setSelectedModel(m.id)}
-                  className={`flex items-center justify-between px-3 py-2.5 cursor-pointer border-b border-border last:border-0 transition-colors ${selectedModel === m.id ? "bg-primary/10 text-primary" : "hover:bg-muted/40"}`}
-                >
-                  <span className="text-sm font-medium">{m.name}</span>
-                  <div className="flex gap-1 opacity-0 group-hover:opacity-100" onClick={e => e.stopPropagation()}>
-                    <Button size="icon" variant="ghost" className="h-6 w-6" onClick={(e) => { e.stopPropagation(); setEditModel(m); setModelName(m.name); setShowModelForm(true); }}>
-                      <Pencil className="w-3 h-3" />
-                    </Button>
-                    <Button size="icon" variant="ghost" className="h-6 w-6 text-destructive" onClick={(e) => { e.stopPropagation(); setDeleteTarget({ type: "model", id: m.id }); }}>
-                      <Trash2 className="w-3 h-3" />
-                    </Button>
-                  </div>
+            <div className="flex flex-wrap gap-2">
+              <Button size="sm" variant={selectedSub === null ? "secondary" : "ghost"} className="h-7 text-xs"
+                onClick={() => { setSelectedSub(null); setSelectedModel(null); }}>
+                Без подкатегории
+              </Button>
+              {subcats?.sort((a,b) => a.sortOrder - b.sortOrder).map(sub => (
+                <div key={sub.id} className="flex items-center gap-1 border border-border rounded-md">
+                  <Button size="sm" variant={selectedSub === sub.id ? "secondary" : "ghost"} className="h-7 text-xs rounded-r-none border-r-0"
+                    onClick={() => { setSelectedSub(sub.id); setSelectedModel(null); }}>
+                    <FolderOpen className="w-3 h-3 mr-1" />{sub.name}
+                  </Button>
+                  <Button size="icon" variant="ghost" className="h-7 w-7 rounded-l-none"
+                    onClick={() => { setEditSub(sub); setSubName(sub.name); setShowSubForm(true); }}>
+                    <Pencil className="w-3 h-3" />
+                  </Button>
+                  <Button size="icon" variant="ghost" className="h-7 w-7 text-destructive rounded-l-none"
+                    onClick={() => setDeleteTarget({ type: "subcategory", id: sub.id })}>
+                    <Trash2 className="w-3 h-3" />
+                  </Button>
                 </div>
               ))}
-              {!loadingModels && !models?.length && (
-                <p className="text-sm text-muted-foreground text-center py-6">Моделей нет</p>
-              )}
             </div>
           </div>
 
-          {/* Services list */}
-          <div>
-            <div className="flex justify-between items-center mb-2">
-              <Label className="text-xs text-muted-foreground">
-                {selectedModel ? `Услуги модели` : "Выберите модель"}
-              </Label>
-              {selectedModel && (
-                <Button size="sm" variant="outline" className="h-7 text-xs gap-1" onClick={() => { setEditSvc(null); setSvcName(""); setSvcPrice(""); setSvcPriceMax(""); setSvcDuration(""); setShowSvcForm(true); }}>
+          <div className="grid md:grid-cols-2 gap-4">
+            {/* Models list */}
+            <div>
+              <div className="flex justify-between items-center mb-2">
+                <Label className="text-xs text-muted-foreground">Модели</Label>
+                <Button size="sm" variant="outline" className="h-7 text-xs gap-1"
+                  onClick={() => { setEditModel(null); setModelName(""); setModelSubId(selectedSub ? String(selectedSub) : "none"); setShowModelForm(true); }}>
                   <Plus className="w-3 h-3" /> Добавить
                 </Button>
-              )}
-            </div>
-            <div className="border border-border rounded-xl overflow-hidden max-h-80 overflow-y-auto">
-              {selectedModel ? (
-                loadingSvc ? <Skeleton className="h-32" /> : svcList?.map(s => (
-                  <div key={s.id} className="flex items-center justify-between px-3 py-2.5 border-b border-border last:border-0 hover:bg-muted/30 transition-colors">
-                    <div className="flex-1 min-w-0">
-                      <p className="text-sm font-medium truncate">{s.name}</p>
-                      <p className="text-xs text-primary font-semibold">
-                        {s.price === 0 ? "Бесплатно" : `${s.price.toLocaleString("ru-RU")} ₽${s.priceMax ? ` – ${s.priceMax.toLocaleString("ru-RU")} ₽` : ""}`}
-                      </p>
-                    </div>
-                    <div className="flex gap-1">
-                      <Button size="icon" variant="ghost" className="h-6 w-6" onClick={() => openSvcEdit(s)}>
+              </div>
+              <div className="border border-border rounded-xl overflow-hidden max-h-80 overflow-y-auto">
+                {loadingModels ? <Skeleton className="h-32" /> : displayModels.map(m => (
+                  <div key={m.id} onClick={() => setSelectedModel(m.id)}
+                    className={`flex items-center justify-between px-3 py-2.5 cursor-pointer border-b border-border last:border-0 transition-colors ${selectedModel === m.id ? "bg-primary/10 text-primary" : "hover:bg-muted/40"}`}>
+                    <span className="text-sm font-medium">{m.name}</span>
+                    <div className="flex gap-1" onClick={e => e.stopPropagation()}>
+                      <Button size="icon" variant="ghost" className="h-6 w-6"
+                        onClick={(e) => { e.stopPropagation(); setEditModel(m); setModelName(m.name); setModelSubId(m.subcategoryId ? String(m.subcategoryId) : "none"); setShowModelForm(true); }}>
                         <Pencil className="w-3 h-3" />
                       </Button>
-                      <Button size="icon" variant="ghost" className="h-6 w-6 text-destructive" onClick={() => setDeleteTarget({ type: "service", id: s.id })}>
+                      <Button size="icon" variant="ghost" className="h-6 w-6 text-destructive"
+                        onClick={(e) => { e.stopPropagation(); setDeleteTarget({ type: "model", id: m.id }); }}>
                         <Trash2 className="w-3 h-3" />
                       </Button>
                     </div>
                   </div>
-                ))
-              ) : (
-                <p className="text-sm text-muted-foreground text-center py-6">Выберите модель слева</p>
-              )}
-              {selectedModel && !loadingSvc && !svcList?.length && (
-                <p className="text-sm text-muted-foreground text-center py-6">Услуги не добавлены</p>
-              )}
+                ))}
+                {!loadingModels && displayModels.length === 0 && (
+                  <p className="text-sm text-muted-foreground text-center py-6">Моделей нет</p>
+                )}
+              </div>
+            </div>
+
+            {/* Services list */}
+            <div>
+              <div className="flex justify-between items-center mb-2">
+                <Label className="text-xs text-muted-foreground">
+                  {selectedModel ? "Услуги модели" : "Выберите модель"}
+                </Label>
+                {selectedModel && (
+                  <Button size="sm" variant="outline" className="h-7 text-xs gap-1"
+                    onClick={() => { setEditSvc(null); setSvcName(""); setSvcPrice(""); setSvcPriceMax(""); setSvcDuration(""); setShowSvcForm(true); }}>
+                    <Plus className="w-3 h-3" /> Добавить
+                  </Button>
+                )}
+              </div>
+              <div className="border border-border rounded-xl overflow-hidden max-h-80 overflow-y-auto">
+                {selectedModel ? (
+                  loadingSvc ? <Skeleton className="h-32" /> : svcList?.map(s => (
+                    <div key={s.id} className="flex items-center justify-between px-3 py-2.5 border-b border-border last:border-0 hover:bg-muted/30 transition-colors">
+                      <div className="flex-1 min-w-0">
+                        <p className="text-sm font-medium truncate">{s.name}</p>
+                        <p className="text-xs text-primary font-semibold">
+                          {s.price === 0 ? "Бесплатно" : `${s.price.toLocaleString("ru-RU")} ₽${s.priceMax ? ` – ${s.priceMax.toLocaleString("ru-RU")} ₽` : ""}`}
+                        </p>
+                      </div>
+                      <div className="flex gap-1">
+                        <Button size="icon" variant="ghost" className="h-6 w-6" onClick={() => openSvcEdit(s)}>
+                          <Pencil className="w-3 h-3" />
+                        </Button>
+                        <Button size="icon" variant="ghost" className="h-6 w-6 text-destructive" onClick={() => setDeleteTarget({ type: "service", id: s.id })}>
+                          <Trash2 className="w-3 h-3" />
+                        </Button>
+                      </div>
+                    </div>
+                  ))
+                ) : (
+                  <p className="text-sm text-muted-foreground text-center py-6">Выберите модель слева</p>
+                )}
+                {selectedModel && !loadingSvc && !svcList?.length && (
+                  <p className="text-sm text-muted-foreground text-center py-6">Услуги не добавлены</p>
+                )}
+              </div>
             </div>
           </div>
-        </div>
+        </>
       )}
+
+      {/* Subcategory dialog */}
+      <Dialog open={showSubForm} onOpenChange={v => !v && setShowSubForm(false)}>
+        <DialogContent className="sm:max-w-sm">
+          <DialogHeader><DialogTitle>{editSub ? "Редактировать" : "Добавить"} подкатегорию</DialogTitle></DialogHeader>
+          <div className="space-y-3">
+            <div>
+              <Label>Название</Label>
+              <Input value={subName} onChange={e => setSubName(e.target.value)} placeholder="Например: Samsung A серия" className="mt-1" />
+            </div>
+            <Button className="w-full" onClick={() => subMutation.mutate()} disabled={!subName || subMutation.isPending}>
+              {subMutation.isPending && <Loader2 className="w-4 h-4 animate-spin mr-2" />}
+              {editSub ? "Сохранить" : "Создать"}
+            </Button>
+          </div>
+        </DialogContent>
+      </Dialog>
 
       {/* Model dialog */}
       <Dialog open={showModelForm} onOpenChange={v => !v && setShowModelForm(false)}>
@@ -449,7 +557,19 @@ function ModelsTab() {
           <div className="space-y-3">
             <div>
               <Label>Название модели</Label>
-              <Input value={modelName} onChange={e => setModelName(e.target.value)} placeholder="Например: iPhone 15 Pro" className="mt-1" />
+              <Input value={modelName} onChange={e => setModelName(e.target.value)} placeholder="Например: Samsung A55" className="mt-1" />
+            </div>
+            <div>
+              <Label>Подкатегория</Label>
+              <Select value={modelSubId} onValueChange={setModelSubId}>
+                <SelectTrigger className="mt-1"><SelectValue /></SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="none">Без подкатегории</SelectItem>
+                  {subcats?.map(s => (
+                    <SelectItem key={s.id} value={String(s.id)}>{s.name}</SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
             </div>
             <Button className="w-full" onClick={() => modelMutation.mutate()} disabled={!modelName || modelMutation.isPending}>
               {modelMutation.isPending && <Loader2 className="w-4 h-4 animate-spin mr-2" />}
@@ -495,7 +615,7 @@ function ModelsTab() {
         <AlertDialogContent>
           <AlertDialogHeader>
             <AlertDialogTitle>
-              {deleteTarget?.type === "model" ? "Удалить модель?" : "Удалить услугу?"}
+              {deleteTarget?.type === "subcategory" ? "Удалить подкатегорию?" : deleteTarget?.type === "model" ? "Удалить модель?" : "Удалить услугу?"}
             </AlertDialogTitle>
           </AlertDialogHeader>
           <AlertDialogFooter>

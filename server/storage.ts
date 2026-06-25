@@ -2,9 +2,10 @@ import { drizzle } from "drizzle-orm/better-sqlite3";
 import Database from "better-sqlite3";
 import { eq, desc } from "drizzle-orm";
 import {
-  users, categories, deviceModels, services, suppliers, changeRequests,
+  users, categories, subcategories, deviceModels, services, suppliers, changeRequests,
   type User, type InsertUser,
   type Category, type InsertCategory,
+  type Subcategory, type InsertSubcategory,
   type DeviceModel, type InsertDeviceModel,
   type Service, type InsertService,
   type Supplier, type InsertSupplier,
@@ -34,9 +35,16 @@ sqlite.exec(`
     icon TEXT NOT NULL DEFAULT 'Smartphone',
     sort_order INTEGER NOT NULL DEFAULT 0
   );
+  CREATE TABLE IF NOT EXISTS subcategories (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    category_id INTEGER NOT NULL,
+    name TEXT NOT NULL,
+    sort_order INTEGER NOT NULL DEFAULT 0
+  );
   CREATE TABLE IF NOT EXISTS device_models (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     category_id INTEGER NOT NULL,
+    subcategory_id INTEGER,
     name TEXT NOT NULL,
     sort_order INTEGER NOT NULL DEFAULT 0
   );
@@ -176,8 +184,15 @@ export interface IStorage {
   updateCategory(id: number, data: Partial<InsertCategory>): Category | undefined;
   deleteCategory(id: number): void;
 
+  // Subcategories
+  getSubcategoriesByCategory(categoryId: number): Subcategory[];
+  createSubcategory(data: InsertSubcategory): Subcategory;
+  updateSubcategory(id: number, data: Partial<InsertSubcategory>): Subcategory | undefined;
+  deleteSubcategory(id: number): void;
+
   // Device Models
   getDeviceModelsByCategory(categoryId: number): DeviceModel[];
+  getDeviceModelsBySubcategory(subcategoryId: number): DeviceModel[];
   getAllDeviceModels(): DeviceModel[];
   createDeviceModel(data: InsertDeviceModel): DeviceModel;
   updateDeviceModel(id: number, data: Partial<InsertDeviceModel>): DeviceModel | undefined;
@@ -235,8 +250,24 @@ export class SQLiteStorage implements IStorage {
     db.delete(categories).where(eq(categories.id, id)).run();
   }
 
+  getSubcategoriesByCategory(categoryId: number) {
+    return db.select().from(subcategories).where(eq(subcategories.categoryId, categoryId)).all();
+  }
+  createSubcategory(data: InsertSubcategory) {
+    return db.insert(subcategories).values(data).returning().get();
+  }
+  updateSubcategory(id: number, data: Partial<InsertSubcategory>) {
+    return db.update(subcategories).set(data).where(eq(subcategories.id, id)).returning().get();
+  }
+  deleteSubcategory(id: number) {
+    db.delete(subcategories).where(eq(subcategories.id, id)).run();
+  }
+
   getDeviceModelsByCategory(categoryId: number) {
     return db.select().from(deviceModels).where(eq(deviceModels.categoryId, categoryId)).all();
+  }
+  getDeviceModelsBySubcategory(subcategoryId: number) {
+    return db.select().from(deviceModels).where(eq(deviceModels.subcategoryId, subcategoryId)).all();
   }
   getAllDeviceModels() {
     return db.select().from(deviceModels).all();

@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { useQuery } from "@tanstack/react-query";
-import { Smartphone, Phone, Gamepad2, ChevronDown, ChevronRight, Search, Plus, Loader2 } from "lucide-react";
+import { Smartphone, Phone, Gamepad2, ChevronDown, ChevronRight, Search, Plus, Loader2, FolderOpen } from "lucide-react";
 import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -9,6 +9,8 @@ import type { Category, DeviceModel, Service } from "@shared/schema";
 import { useAuth } from "@/lib/auth";
 import { apiRequest, queryClient } from "@/lib/queryClient";
 import { useToast } from "@/hooks/use-toast";
+
+type Subcategory = { id: number; categoryId: number; name: string; sortOrder: number };
 
 const iconMap: Record<string, React.ReactNode> = {
   Smartphone: <Smartphone className="w-5 h-5" />,
@@ -39,16 +41,33 @@ function ServiceRow({ service }: { service: Service }) {
   );
 }
 
+// ─── Sort helper ──────────────────────────────────────────────────────────
+function sortModels(models: DeviceModel[]) {
+  return [...models].sort((a, b) => {
+    const parseModel = (name: string) => {
+      const num = parseInt(name.match(/\d+/)?.[0] || "0");
+      const s = name.toLowerCase();
+      let order = 0;
+      if (s.includes("pro max")) order = 4;
+      else if (s.includes("pro")) order = 3;
+      else if (s.includes("plus") || s.includes("+")) order = 2;
+      else if (s.includes("mini")) order = 1;
+      return { num, order, name };
+    };
+    const pa = parseModel(a.name), pb = parseModel(b.name);
+    if (pa.num !== pb.num) return pa.num - pb.num;
+    if (pa.order !== pb.order) return pa.order - pb.order;
+    return pa.name.localeCompare(pb.name, "ru");
+  });
+}
+
 // ─── Model Accordion ──────────────────────────────────────────────────────
 function ModelAccordion({ model, search }: { model: DeviceModel; search: string }) {
   const isSearching = search.trim().length > 0;
   const nameMatches = model.name.toLowerCase().includes(search.toLowerCase());
-
-  // Если идёт поиск и название модели не совпадает — не показываем
   if (isSearching && !nameMatches) return null;
 
   const [open, setOpen] = useState(false);
-  const isOpen = open;
 
   const { data: services, isLoading } = useQuery<Service[]>({
     queryKey: ["/api/services", model.id],
@@ -57,7 +76,7 @@ function ModelAccordion({ model, search }: { model: DeviceModel; search: string 
       if (!res.ok) throw new Error("Ошибка загрузки");
       return res.json();
     },
-    enabled: isOpen,
+    enabled: open,
   });
 
   return (
@@ -68,10 +87,10 @@ function ModelAccordion({ model, search }: { model: DeviceModel; search: string 
         className="w-full flex items-center justify-between px-4 py-3 bg-card hover:bg-muted/30 transition-colors text-left"
       >
         <span className="font-medium text-sm">{model.name}</span>
-        <ChevronDown className={`w-4 h-4 text-muted-foreground transition-transform duration-200 ${isOpen ? "rotate-180" : ""}`} />
+        <ChevronDown className={`w-4 h-4 text-muted-foreground transition-transform duration-200 ${open ? "rotate-180" : ""}`} />
       </button>
 
-      {isOpen && (
+      {open && (
         <div className="accordion-content border-t border-border bg-card/50 px-2 py-1">
           {isLoading ? (
             <div className="space-y-2 p-2">
@@ -92,9 +111,69 @@ function ModelAccordion({ model, search }: { model: DeviceModel; search: string 
   );
 }
 
+// ─── Subcategory Section ──────────────────────────────────────────────────
+function SubcategorySection({ sub, search }: { sub: Subcategory; search: string }) {
+  const [open, setOpen] = useState(true);
+
+  const { data: models, isLoading } = useQuery<DeviceModel[]>({
+    queryKey: ["/api/models", "sub", sub.id],
+    queryFn: async () => {
+      const res = await apiRequest("GET", `/api/models?subcategoryId=${sub.id}`);
+      if (!res.ok) throw new Error();
+      return res.json();
+    },
+  });
+
+  const sorted = models ? sortModels(models) : [];
+  const filtered = search
+    ? sorted.filter(m => m.name.toLowerCase().includes(search.toLowerCase()))
+    : sorted;
+
+  if (search && filtered.length === 0) return null;
+
+  return (
+    <div className="mb-4">
+      <button
+        onClick={() => setOpen(v => !v)}
+        className="w-full flex items-center gap-2 mb-2 group"
+      >
+        <FolderOpen className="w-4 h-4 text-primary/60 shrink-0" />
+        <span className="text-sm font-semibold text-foreground/80 flex-1 text-left">{sub.name}</span>
+        {models && (
+          <Badge variant="secondary" className="text-xs">{models.length}</Badge>
+        )}
+        <ChevronRight className={`w-4 h-4 text-muted-foreground transition-transform duration-200 ${open ? "rotate-90" : ""}`} />
+      </button>
+
+      {open && (
+        <div className="pl-4 border-l-2 border-border/50">
+          {isLoading ? (
+            <div className="space-y-2">{[1,2,3].map(i => <Skeleton key={i} className="h-11 w-full rounded-xl" />)}</div>
+          ) : filtered.length > 0 ? (
+            filtered.map(model => (
+              <ModelAccordion key={model.id} model={model} search={search} />
+            ))
+          ) : (
+            <p className="text-sm text-muted-foreground py-3 text-center border border-dashed border-border rounded-xl">Модели не добавлены</p>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
 // ─── Category Section ─────────────────────────────────────────────────────
 function CategorySection({ category, search }: { category: Category; search: string }) {
   const [open, setOpen] = useState(true);
+
+  const { data: subcats } = useQuery<Subcategory[]>({
+    queryKey: ["/api/subcategories", category.id],
+    queryFn: async () => {
+      const res = await apiRequest("GET", `/api/subcategories?categoryId=${category.id}`);
+      if (!res.ok) throw new Error();
+      return res.json();
+    },
+  });
 
   const { data: models, isLoading } = useQuery<DeviceModel[]>({
     queryKey: ["/api/models", category.id],
@@ -104,6 +183,14 @@ function CategorySection({ category, search }: { category: Category; search: str
       return res.json();
     },
   });
+
+  // Модели без подкатегории
+  const noSubModels = models ? sortModels(models.filter(m => !m.subcategoryId)) : [];
+  const noSubFiltered = search
+    ? noSubModels.filter(m => m.name.toLowerCase().includes(search.toLowerCase()))
+    : noSubModels;
+
+  const hasSubs = subcats && subcats.length > 0;
 
   return (
     <section className="mb-8">
@@ -130,31 +217,23 @@ function CategorySection({ category, search }: { category: Category; search: str
             <div className="space-y-2">
               {[1, 2, 3, 4].map(i => <Skeleton key={i} className="h-12 w-full rounded-xl" />)}
             </div>
-          ) : models && models.length > 0 ? (
-            [...models].sort((a, b) => {
-              // Умная сортировка: сначала по номеру, потом по версии
-              const parseModel = (name: string) => {
-                const num = parseInt(name.match(/\d+/)?.[0] || "0");
-                const suffix = name.toLowerCase();
-                let order = 0;
-                if (suffix.includes("pro max")) order = 4;
-                else if (suffix.includes("pro")) order = 3;
-                else if (suffix.includes("plus") || suffix.includes("+")) order = 2;
-                else if (suffix.includes("mini")) order = 1;
-                return { num, order, name };
-              };
-              const pa = parseModel(a.name);
-              const pb = parseModel(b.name);
-              if (pa.num !== pb.num) return pa.num - pb.num;
-              if (pa.order !== pb.order) return pa.order - pb.order;
-              return pa.name.localeCompare(pb.name, "ru");
-            }).map(model => (
-              <ModelAccordion key={model.id} model={model} search={search} />
-            ))
           ) : (
-            <p className="text-sm text-muted-foreground py-4 text-center border border-dashed border-border rounded-xl">
-              Модели не добавлены
-            </p>
+            <>
+              {/* Подкатегории */}
+              {hasSubs && subcats.sort((a,b) => a.sortOrder - b.sortOrder).map(sub => (
+                <SubcategorySection key={sub.id} sub={sub} search={search} />
+              ))}
+              {/* Модели без подкатегории */}
+              {noSubFiltered.map(model => (
+                <ModelAccordion key={model.id} model={model} search={search} />
+              ))}
+              {/* Пусто */}
+              {!hasSubs && noSubFiltered.length === 0 && !isLoading && (
+                <p className="text-sm text-muted-foreground py-4 text-center border border-dashed border-border rounded-xl">
+                  Модели не добавлены
+                </p>
+              )}
+            </>
           )}
         </div>
       )}
@@ -166,7 +245,6 @@ function CategorySection({ category, search }: { category: Category; search: str
 export default function PriceListPage({ onRequestOpen }: { onRequestOpen: () => void }) {
   const [search, setSearch] = useState("");
   const { data: categories, isLoading } = useQuery<Category[]>({ queryKey: ["/api/categories"] });
-  const { user } = useAuth();
 
   return (
     <div className="max-w-3xl mx-auto px-4 py-6">
@@ -193,7 +271,7 @@ export default function PriceListPage({ onRequestOpen }: { onRequestOpen: () => 
         <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" />
         <Input
           data-testid="input-search"
-          placeholder="Поиск по модели или услуге..."
+          placeholder="Поиск по модели..."
           value={search}
           onChange={e => setSearch(e.target.value)}
           className="pl-9 bg-card"

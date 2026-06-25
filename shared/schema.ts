@@ -27,10 +27,23 @@ export const insertCategorySchema = createInsertSchema(categories).omit({ id: tr
 export type InsertCategory = z.infer<typeof insertCategorySchema>;
 export type Category = typeof categories.$inferSelect;
 
+// ─── Subcategories ────────────────────────────────────────────────────────────
+export const subcategories = sqliteTable("subcategories", {
+  id: integer("id").primaryKey({ autoIncrement: true }),
+  categoryId: integer("category_id").notNull(),
+  name: text("name").notNull(),
+  sortOrder: integer("sort_order").notNull().default(0),
+});
+
+export const insertSubcategorySchema = createInsertSchema(subcategories).omit({ id: true });
+export type InsertSubcategory = z.infer<typeof insertSubcategorySchema>;
+export type Subcategory = typeof subcategories.$inferSelect;
+
 // ─── Device Models ────────────────────────────────────────────────────────────
 export const deviceModels = sqliteTable("device_models", {
   id: integer("id").primaryKey({ autoIncrement: true }),
   categoryId: integer("category_id").notNull(),
+  subcategoryId: integer("subcategory_id"), // null = без подкатегории
   name: text("name").notNull(),
   sortOrder: integer("sort_order").notNull().default(0),
 });

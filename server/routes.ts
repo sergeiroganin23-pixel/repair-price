@@ -100,10 +100,39 @@ export function registerRoutes(httpServer: Server, app: Express) {
     res.json({ ok: true });
   });
 
-  // ─── Device Models ────────────────────────────────────────────────────────
+  // ─── Subcategories ────────────────────────────────────────────
+  app.get("/api/subcategories", (req, res) => {
+    const catId = req.query.categoryId ? parseInt(req.query.categoryId as string) : null;
+    if (!catId) return res.status(400).json({ error: "categoryId обязателен" });
+    res.json(storage.getSubcategoriesByCategory(catId));
+  });
+
+  app.post("/api/subcategories", authenticateToken, requireAdmin, (req: AuthRequest, res: Response) => {
+    const { categoryId, name, sortOrder } = req.body;
+    if (!categoryId || !name) return res.status(400).json({ error: "Категория и название обязательны" });
+    const sub = storage.createSubcategory({ categoryId, name, sortOrder: sortOrder ?? 0 });
+    res.json(sub);
+  });
+
+  app.put("/api/subcategories/:id", authenticateToken, requireAdmin, (req: AuthRequest, res: Response) => {
+    const id = parseInt(req.params.id);
+    const result = storage.updateSubcategory(id, req.body);
+    if (!result) return res.status(404).json({ error: "Подкатегория не найдена" });
+    res.json(result);
+  });
+
+  app.delete("/api/subcategories/:id", authenticateToken, requireAdmin, (req: AuthRequest, res: Response) => {
+    storage.deleteSubcategory(parseInt(req.params.id));
+    res.json({ ok: true });
+  });
+
+  // ─── Device Models ────────────────────────────────────────────
   app.get("/api/models", (req, res) => {
     const catId = req.query.categoryId ? parseInt(req.query.categoryId as string) : null;
-    if (catId) {
+    const subId = req.query.subcategoryId ? parseInt(req.query.subcategoryId as string) : null;
+    if (subId) {
+      res.json(storage.getDeviceModelsBySubcategory(subId));
+    } else if (catId) {
       res.json(storage.getDeviceModelsByCategory(catId));
     } else {
       res.json(storage.getAllDeviceModels());
@@ -111,9 +140,9 @@ export function registerRoutes(httpServer: Server, app: Express) {
   });
 
   app.post("/api/models", authenticateToken, requireAdmin, (req: AuthRequest, res: Response) => {
-    const { categoryId, name, sortOrder } = req.body;
+    const { categoryId, subcategoryId, name, sortOrder } = req.body;
     if (!categoryId || !name) return res.status(400).json({ error: "Категория и название обязательны" });
-    const model = storage.createDeviceModel({ categoryId, name, sortOrder: sortOrder ?? 0 });
+    const model = storage.createDeviceModel({ categoryId, subcategoryId: subcategoryId ?? null, name, sortOrder: sortOrder ?? 0 });
     res.json(model);
   });
 
