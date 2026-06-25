@@ -48,8 +48,7 @@ function ModelAccordion({ model, search }: { model: DeviceModel; search: string 
   if (isSearching && !nameMatches) return null;
 
   const [open, setOpen] = useState(false);
-  // Авторазкрытие при поиске
-  const isOpen = isSearching ? true : open;
+  const isOpen = open;
 
   const { data: services, isLoading } = useQuery<Service[]>({
     queryKey: ["/api/services", model.id],
@@ -65,13 +64,11 @@ function ModelAccordion({ model, search }: { model: DeviceModel; search: string 
     <div className="border border-border rounded-xl overflow-hidden mb-2">
       <button
         data-testid={`accordion-model-${model.id}`}
-        onClick={() => !isSearching && setOpen(v => !v)}
+        onClick={() => setOpen(v => !v)}
         className="w-full flex items-center justify-between px-4 py-3 bg-card hover:bg-muted/30 transition-colors text-left"
       >
         <span className="font-medium text-sm">{model.name}</span>
-        {!isSearching && (
-          <ChevronDown className={`w-4 h-4 text-muted-foreground transition-transform duration-200 ${isOpen ? "rotate-180" : ""}`} />
-        )}
+        <ChevronDown className={`w-4 h-4 text-muted-foreground transition-transform duration-200 ${isOpen ? "rotate-180" : ""}`} />
       </button>
 
       {isOpen && (
@@ -134,7 +131,24 @@ function CategorySection({ category, search }: { category: Category; search: str
               {[1, 2, 3, 4].map(i => <Skeleton key={i} className="h-12 w-full rounded-xl" />)}
             </div>
           ) : models && models.length > 0 ? (
-            models.map(model => (
+            [...models].sort((a, b) => {
+              // Умная сортировка: сначала по номеру, потом по версии
+              const parseModel = (name: string) => {
+                const num = parseInt(name.match(/\d+/)?.[0] || "0");
+                const suffix = name.toLowerCase();
+                let order = 0;
+                if (suffix.includes("pro max")) order = 4;
+                else if (suffix.includes("pro")) order = 3;
+                else if (suffix.includes("plus") || suffix.includes("+")) order = 2;
+                else if (suffix.includes("mini")) order = 1;
+                return { num, order, name };
+              };
+              const pa = parseModel(a.name);
+              const pb = parseModel(b.name);
+              if (pa.num !== pb.num) return pa.num - pb.num;
+              if (pa.order !== pb.order) return pa.order - pb.order;
+              return pa.name.localeCompare(pb.name, "ru");
+            }).map(model => (
               <ModelAccordion key={model.id} model={model} search={search} />
             ))
           ) : (
