@@ -17,17 +17,34 @@ import {
 } from "lucide-react";
 import type { Repair, Client } from "@shared/schema";
 
-// ─── Константы ────────────────────────────────────────────────────────────────
-const STATUS_LABELS: Record<string, string> = {
+// ─── Статусы (статичные fallback + динамические из API) ────────────────────────
+const DEFAULT_STATUS_LABELS: Record<string, string> = {
   новая: "Новая", в_работе: "В работе", готово: "Готово", отказ: "Отказ", записал: "Записал",
 };
-const STATUS_COLORS: Record<string, string> = {
+const DEFAULT_STATUS_COLORS: Record<string, string> = {
   новая: "bg-blue-500 text-white",
   в_работе: "bg-yellow-500 text-white",
   готово: "bg-green-600 text-white",
   отказ: "bg-red-500 text-white",
   записал: "bg-purple-500 text-white",
 };
+
+// Глобальные переменные, заполняются из API при загрузке
+let STATUS_LABELS: Record<string, string> = { ...DEFAULT_STATUS_LABELS };
+let STATUS_COLORS: Record<string, string> = { ...DEFAULT_STATUS_COLORS };
+
+function useRepairStatuses() {
+  const { data } = useQuery<{id: number; key: string; label: string; color: string}[]>({
+    queryKey: ["/api/repair-statuses"],
+    queryFn: async () => { const r = await apiRequest("GET", "/api/repair-statuses"); return r.ok ? r.json() : []; },
+    retry: false,
+  });
+  if (data && data.length > 0) {
+    STATUS_LABELS = Object.fromEntries(data.map(s => [s.key, s.label]));
+    STATUS_COLORS = Object.fromEntries(data.map(s => [s.key, s.color]));
+  }
+  return data ?? [];
+}
 
 function formatDate(iso: string) {
   try {
@@ -134,6 +151,29 @@ function ManualRepairForm({ onClose }: { onClose: () => void }) {
   // Мастера
   const { data: allUsers = [] } = useQuery<{id: number; displayName: string; role: string}[]>({
     queryKey: ["/api/users"],
+    retry: false,
+  });
+
+  // Марки
+  const { data: brands = [] } = useQuery<{id: number; name: string}[]>({
+    queryKey: ["/api/device-brands"],
+    retry: false,
+  });
+  const [selectedBrandId, setSelectedBrandId] = useState<string>("");
+  // Модели для выбранной марки
+  const { data: brandModels = [] } = useQuery<{id: number; brandId: number; name: string}[]>({
+    queryKey: ["/api/device-models-repair", selectedBrandId],
+    queryFn: async () => {
+      if (!selectedBrandId) return [];
+      const r = await apiRequest("GET", `/api/device-models-repair?brandId=${selectedBrandId}`);
+      return r.ok ? r.json() : [];
+    },
+    enabled: !!selectedBrandId,
+    retry: false,
+  });
+  // Неисправности
+  const { data: issuesList = [] } = useQuery<{id: number; name: string}[]>({
+    queryKey: ["/api/repair-issues"],
     retry: false,
   });
 
@@ -299,11 +339,30 @@ function ManualRepairForm({ onClose }: { onClose: () => void }) {
           </div>
           <div className="space-y-1.5">
             <Label>Марка</Label>
-            <Input value={form.brand} onChange={e => set("brand", e.target.value)} placeholder="Apple, Samsung..." />
+            <Select value={selectedBrandId} onValueChange={v => {
+              setSelectedBrandId(v);
+              const b = brands.find(b => b.id.toString() === v);
+              set("brand", b?.name || "");
+              set("model", "");
+            }}>
+              <SelectTrigger><SelectValue placeholder="Выберите марку..." /></SelectTrigger>
+              <SelectContent>
+                {brands.map(b => <SelectItem key={b.id} value={b.id.toString()}>{b.name}</SelectItem>)}
+              </SelectContent>
+            </Select>
           </div>
           <div className="space-y-1.5">
             <Label>Модель</Label>
-            <Input value={form.model} onChange={e => set("model", e.target.value)} placeholder="iPhone 13, Galaxy S22..." />
+            {brandModels.length > 0 ? (
+              <Select value={form.model} onValueChange={v => set("model", v)}>
+                <SelectTrigger><SelectValue placeholder="Выберите модель..." /></SelectTrigger>
+                <SelectContent>
+                  {brandModels.map(m => <SelectItem key={m.id} value={m.name}>{m.name}</SelectItem>)}
+                </SelectContent>
+              </Select>
+            ) : (
+              <Input value={form.model} onChange={e => set("model", e.target.value)} placeholder="Введите модель вручную..." />
+            )}
           </div>
           <div className="space-y-1.5">
             <Label>IMEI / Серийный номер</Label>
@@ -317,8 +376,16 @@ function ManualRepairForm({ onClose }: { onClose: () => void }) {
         </div>
         <div className="space-y-1.5 mt-3">
           <Label>Неисправность</Label>
-          <Textarea value={form.issue} onChange={e => set("issue", e.target.value)} rows={2}
-            placeholder="Не включается, разбит экран..." />
+          <Select value={form.issue} onValueChange={v => set("issue", v)}>
+            <SelectTrigger><SelectValue placeholder="Выберите из списка..." /></SelectTrigger>
+            <SelectContent>
+              {issuesList.map(i => <SelectItem key={i.id} value={i.name}>{i.name}</SelectItem>)}
+              <SelectItem value="__custom__">Другое (ввести вручную)</SelectItem>
+            </SelectContent>
+          </Select>
+          {form.issue === "__custom__" && (
+            <Input placeholder="Опишите неисправность..." onChange={e => set("issue", e.target.value)} className="mt-1.5" />
+          )}
         </div>
       </div>
 
@@ -783,6 +850,7 @@ function RepairList({
 export default function OrdersPage() {
   const [tab, setTab] = useState<"email" | "manual">("email");
   const [createOpen, setCreateOpen] = useState(false);
+  const statuses = useRepairStatuses();
 
   const { data: repairs = [], isLoading } = useQuery<Repair[]>({
     queryKey: ["/api/repairs"],

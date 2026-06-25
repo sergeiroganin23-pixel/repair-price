@@ -4,6 +4,7 @@ import { eq, desc } from "drizzle-orm";
 import {
   users, categories, subcategories, deviceModels, services, suppliers, changeRequests, repairs, sessions, clients,
   parts, partMovements, transactions, salaries,
+  repairStatuses, deviceBrands, deviceModelsRepair, repairIssues,
   type User, type InsertUser,
   type Category, type InsertCategory,
   type Subcategory, type InsertSubcategory,
@@ -18,6 +19,10 @@ import {
   type PartMovement, type InsertPartMovement,
   type Transaction, type InsertTransaction,
   type Salary, type InsertSalary,
+  type RepairStatus, type InsertRepairStatus,
+  type DeviceBrand, type InsertDeviceBrand,
+  type DeviceModelRepair, type InsertDeviceModelRepair,
+  type RepairIssue, type InsertRepairIssue,
 } from "@shared/schema";
 import bcrypt from "bcryptjs";
 
@@ -196,6 +201,30 @@ sqlite.exec(`
     created_at TEXT NOT NULL,
     date TEXT NOT NULL
   );
+  CREATE TABLE IF NOT EXISTS repair_statuses (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    key TEXT NOT NULL UNIQUE,
+    label TEXT NOT NULL,
+    color TEXT NOT NULL DEFAULT 'bg-gray-500 text-white',
+    scope TEXT NOT NULL DEFAULT 'both',
+    sort_order INTEGER NOT NULL DEFAULT 0
+  );
+  CREATE TABLE IF NOT EXISTS device_brands (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    name TEXT NOT NULL,
+    sort_order INTEGER NOT NULL DEFAULT 0
+  );
+  CREATE TABLE IF NOT EXISTS device_models_repair (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    brand_id INTEGER NOT NULL,
+    name TEXT NOT NULL,
+    sort_order INTEGER NOT NULL DEFAULT 0
+  );
+  CREATE TABLE IF NOT EXISTS repair_issues (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    name TEXT NOT NULL,
+    sort_order INTEGER NOT NULL DEFAULT 0
+  );
 `);
 
 // ─── Фикс старой базы: пересоздать sessions если нет колонки id или UNIQUE constraint ─────
@@ -318,6 +347,48 @@ function seedIfEmpty() {
     db.insert(suppliers).values({ name: "МастерСервис", type: "outsourcer", contact: "Дмитрий", phone: "+7 999 777 88 99", website: null, notes: "Аутсорс по платам, микропайка", sortOrder: 4 }).run();
     db.insert(suppliers).values({ name: "GameFix", type: "outsourcer", contact: "Сергей", phone: "+7 999 000 11 22", website: null, notes: "Ремонт игровых консолей PlayStation, Xbox", sortOrder: 5 }).run();
     db.insert(suppliers).values({ name: "DataRestore Pro", type: "outsourcer", contact: "Михаил", phone: "+7 999 333 44 55", website: "datarestore.ru", notes: "Восстановление данных с повреждённых устройств", sortOrder: 6 }).run();
+  }
+
+  // Seed repair statuses
+  const existingStatuses = db.select().from(repairStatuses).all();
+  if (existingStatuses.length === 0) {
+    const defaultStatuses = [
+      { key: "новая", label: "Новая", color: "bg-blue-500 text-white", scope: "both", sortOrder: 1 },
+      { key: "в_работе", label: "В работе", color: "bg-yellow-500 text-white", scope: "both", sortOrder: 2 },
+      { key: "готово", label: "Готово", color: "bg-green-600 text-white", scope: "both", sortOrder: 3 },
+      { key: "отказ", label: "Отказ", color: "bg-red-500 text-white", scope: "both", sortOrder: 4 },
+      { key: "записал", label: "Записал", color: "bg-purple-500 text-white", scope: "both", sortOrder: 5 },
+    ];
+    for (const s of defaultStatuses) db.insert(repairStatuses).values(s).run();
+  }
+
+  // Seed device brands
+  const existingBrands = db.select().from(deviceBrands).all();
+  if (existingBrands.length === 0) {
+    const brands = ["Apple", "Samsung", "Xiaomi", "Huawei", "OPPO", "Realme", "OnePlus", "Google", "Sony", "Nokia"];
+    brands.forEach((name, i) => db.insert(deviceBrands).values({ name, sortOrder: i + 1 }).run());
+    const appleBrand = db.select().from(deviceBrands).all().find(b => b.name === "Apple");
+    if (appleBrand) {
+      const iphones = ["iPhone 16 Pro Max", "iPhone 16 Pro", "iPhone 16", "iPhone 15 Pro Max", "iPhone 15 Pro", "iPhone 15", "iPhone 14 Pro", "iPhone 14", "iPhone 13", "iPhone 12", "iPhone 11"];
+      iphones.forEach((name, i) => db.insert(deviceModelsRepair).values({ brandId: appleBrand.id, name, sortOrder: i + 1 }).run());
+    }
+    const samsungBrand = db.select().from(deviceBrands).all().find(b => b.name === "Samsung");
+    if (samsungBrand) {
+      const galaxies = ["Galaxy S25 Ultra", "Galaxy S25+", "Galaxy S25", "Galaxy S24 Ultra", "Galaxy S24", "Galaxy A55", "Galaxy A35", "Galaxy A15"];
+      galaxies.forEach((name, i) => db.insert(deviceModelsRepair).values({ brandId: samsungBrand.id, name, sortOrder: i + 1 }).run());
+    }
+  }
+
+  // Seed repair issues
+  const existingIssues = db.select().from(repairIssues).all();
+  if (existingIssues.length === 0) {
+    const issues = [
+      "Разбит экран", "Не включается", "Не держит зарядку", "Не работает зарядка",
+      "Не работает кнопка", "Не работает камера", "Не работает динамик", "Не работает микрофон",
+      "Попала вода", "Не работает Wi-Fi", "Не работает Bluetooth", "Трещина на корпусе",
+      "Зависает / тормозит", "Не видит SIM", "Не работает сенсор"
+    ];
+    issues.forEach((name, i) => db.insert(repairIssues).values({ name, sortOrder: i + 1 }).run());
   }
 }
 
@@ -697,6 +768,66 @@ export class SQLiteStorage implements IStorage {
       return sum + s.amount;
     }, 0);
     return { total, paid, unpaid: total - paid, count: all.length };
+  }
+
+  // ─── Repair Statuses ──────────────────────────────────────────────────────────
+  getRepairStatuses(scope?: string) {
+    let all = db.select().from(repairStatuses).orderBy(repairStatuses.sortOrder).all();
+    if (scope && scope !== 'both') all = all.filter(s => s.scope === scope || s.scope === 'both');
+    return all;
+  }
+  createRepairStatus(data: InsertRepairStatus) {
+    return db.insert(repairStatuses).values(data).returning().get();
+  }
+  updateRepairStatus(id: number, data: Partial<InsertRepairStatus>) {
+    return db.update(repairStatuses).set(data).where(eq(repairStatuses.id, id)).returning().get();
+  }
+  deleteRepairStatus(id: number) {
+    db.delete(repairStatuses).where(eq(repairStatuses.id, id)).run();
+  }
+
+  // ─── Device Brands ────────────────────────────────────────────────────────────
+  getDeviceBrands() {
+    return db.select().from(deviceBrands).orderBy(deviceBrands.sortOrder).all();
+  }
+  createDeviceBrand(data: InsertDeviceBrand) {
+    return db.insert(deviceBrands).values(data).returning().get();
+  }
+  updateDeviceBrand(id: number, data: Partial<InsertDeviceBrand>) {
+    return db.update(deviceBrands).set(data).where(eq(deviceBrands.id, id)).returning().get();
+  }
+  deleteDeviceBrand(id: number) {
+    db.delete(deviceBrands).where(eq(deviceBrands.id, id)).run();
+  }
+
+  // ─── Device Models Repair ─────────────────────────────────────────────────────
+  getDeviceModelsRepair(brandId?: number) {
+    let all = db.select().from(deviceModelsRepair).orderBy(deviceModelsRepair.sortOrder).all();
+    if (brandId) all = all.filter(m => m.brandId === brandId);
+    return all;
+  }
+  createDeviceModelRepair(data: InsertDeviceModelRepair) {
+    return db.insert(deviceModelsRepair).values(data).returning().get();
+  }
+  updateDeviceModelRepair(id: number, data: Partial<InsertDeviceModelRepair>) {
+    return db.update(deviceModelsRepair).set(data).where(eq(deviceModelsRepair.id, id)).returning().get();
+  }
+  deleteDeviceModelRepair(id: number) {
+    db.delete(deviceModelsRepair).where(eq(deviceModelsRepair.id, id)).run();
+  }
+
+  // ─── Repair Issues ────────────────────────────────────────────────────────────
+  getRepairIssues() {
+    return db.select().from(repairIssues).orderBy(repairIssues.sortOrder).all();
+  }
+  createRepairIssue(data: InsertRepairIssue) {
+    return db.insert(repairIssues).values(data).returning().get();
+  }
+  updateRepairIssue(id: number, data: Partial<InsertRepairIssue>) {
+    return db.update(repairIssues).set(data).where(eq(repairIssues.id, id)).returning().get();
+  }
+  deleteRepairIssue(id: number) {
+    db.delete(repairIssues).where(eq(repairIssues.id, id)).run();
   }
 }
 

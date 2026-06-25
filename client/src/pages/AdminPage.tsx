@@ -21,10 +21,11 @@ import {
 } from "@/components/ui/alert-dialog";
 import { useToast } from "@/hooks/use-toast";
 import { apiRequest, queryClient } from "@/lib/queryClient";
-import type { Category, DeviceModel, Service, Supplier, ChangeRequest } from "@shared/schema";
+import type { Category, DeviceModel, Service, Supplier, ChangeRequest, RepairStatus, DeviceBrand, DeviceModelRepair, RepairIssue } from "@shared/schema";
 import {
   Plus, Pencil, Trash2, Loader2, Check, X, MessageSquare,
   Smartphone, Wrench, Truck, Bell, UserPlus, Users, FolderPlus, FolderOpen,
+  AlertCircle, Tag, ChevronRight,
 } from "lucide-react";
 
 type Subcategory = { id: number; categoryId: number; name: string; sortOrder: number };
@@ -960,6 +961,259 @@ function UsersTab() {
   );
 }
 
+
+// ─── Statuses Tab ─────────────────────────────────────────────────────────────
+function StatusesTab() {
+  const { toast } = useToast();
+  const { data: statuses = [], isLoading } = useQuery<RepairStatus[]>({
+    queryKey: ["/api/repair-statuses"],
+    queryFn: async () => { const r = await apiRequest("GET", "/api/repair-statuses"); return r.ok ? r.json() : []; },
+  });
+
+  const [showForm, setShowForm] = useState(false);
+  const [editItem, setEditItem] = useState<RepairStatus | null>(null);
+  const [form, setForm] = useState({ key: "", label: "", color: "bg-gray-500 text-white", scope: "both" });
+
+  const COLORS = [
+    { value: "bg-blue-500 text-white", label: "Синий" },
+    { value: "bg-yellow-500 text-white", label: "Жёлтый" },
+    { value: "bg-green-600 text-white", label: "Зелёный" },
+    { value: "bg-red-500 text-white", label: "Красный" },
+    { value: "bg-purple-500 text-white", label: "Фиолетовый" },
+    { value: "bg-orange-500 text-white", label: "Оранжевый" },
+    { value: "bg-gray-500 text-white", label: "Серый" },
+    { value: "bg-teal-500 text-white", label: "Бирюзовый" },
+  ];
+
+  const createMut = useMutation({
+    mutationFn: (d: any) => apiRequest("POST", "/api/repair-statuses", d),
+    onSuccess: () => { queryClient.invalidateQueries({ queryKey: ["/api/repair-statuses"] }); toast({ title: "Статус добавлен" }); setShowForm(false); },
+  });
+  const updateMut = useMutation({
+    mutationFn: ({ id, d }: any) => apiRequest("PUT", `/api/repair-statuses/${id}`, d),
+    onSuccess: () => { queryClient.invalidateQueries({ queryKey: ["/api/repair-statuses"] }); toast({ title: "Обновлено" }); setShowForm(false); },
+  });
+  const deleteMut = useMutation({
+    mutationFn: (id: number) => apiRequest("DELETE", `/api/repair-statuses/${id}`),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ["/api/repair-statuses"] }),
+  });
+
+  function openCreate() { setEditItem(null); setForm({ key: "", label: "", color: "bg-gray-500 text-white", scope: "both" }); setShowForm(true); }
+  function openEdit(s: RepairStatus) { setEditItem(s); setForm({ key: s.key, label: s.label, color: s.color, scope: s.scope }); setShowForm(true); }
+  function submit() {
+    if (!form.key || !form.label) { toast({ title: "Заполните ключ и название", variant: "destructive" }); return; }
+    if (editItem) updateMut.mutate({ id: editItem.id, d: form });
+    else createMut.mutate(form);
+  }
+
+  return (
+    <div>
+      <div className="flex items-center justify-between mb-4">
+        <p className="text-sm text-muted-foreground">Статусы отображаются в заявках. Ключ — латиница/кирилица без пробелов.</p>
+        <Button size="sm" onClick={openCreate} className="gap-1.5"><Plus className="w-4 h-4" />Добавить</Button>
+      </div>
+      {isLoading ? <div className="h-20 bg-muted animate-pulse rounded-lg" /> : (
+        <div className="space-y-2">
+          {statuses.map(s => (
+            <div key={s.id} className="flex items-center gap-3 p-3 bg-card border border-border rounded-lg">
+              <span className={`px-2.5 py-0.5 rounded-full text-xs font-semibold ${s.color}`}>{s.label}</span>
+              <span className="text-xs text-muted-foreground font-mono flex-1">{s.key}</span>
+              <span className="text-xs text-muted-foreground">{s.scope === "orders" ? "Заказы" : s.scope === "email" ? "С почты" : "Оба"}</span>
+              <Button size="icon" variant="ghost" className="h-7 w-7" onClick={() => openEdit(s)}><Pencil className="w-3.5 h-3.5" /></Button>
+              <Button size="icon" variant="ghost" className="h-7 w-7 text-destructive hover:text-destructive" onClick={() => deleteMut.mutate(s.id)}><Trash2 className="w-3.5 h-3.5" /></Button>
+            </div>
+          ))}
+        </div>
+      )}
+      <Dialog open={showForm} onOpenChange={setShowForm}>
+        <DialogContent className="max-w-sm">
+          <DialogHeader><DialogTitle>{editItem ? "Редактировать статус" : "Новый статус"}</DialogTitle></DialogHeader>
+          <div className="space-y-3">
+            <div><Label>Ключ (уникальный, без пробелов)</Label><Input value={form.key} onChange={e => setForm(p => ({...p, key: e.target.value}))} placeholder="в_работе" disabled={!!editItem} /></div>
+            <div><Label>Название</Label><Input value={form.label} onChange={e => setForm(p => ({...p, label: e.target.value}))} placeholder="В работе" /></div>
+            <div><Label>Цвет</Label>
+              <Select value={form.color} onValueChange={v => setForm(p => ({...p, color: v}))}>
+                <SelectTrigger><SelectValue /></SelectTrigger>
+                <SelectContent>{COLORS.map(c => <SelectItem key={c.value} value={c.value}><span className={`px-2 py-0.5 rounded text-xs font-medium ${c.value}`}>{c.label}</span></SelectItem>)}</SelectContent>
+              </Select>
+            </div>
+            <div><Label>Показывать в</Label>
+              <Select value={form.scope} onValueChange={v => setForm(p => ({...p, scope: v}))}>
+                <SelectTrigger><SelectValue /></SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="both">Заказы и С почты</SelectItem>
+                  <SelectItem value="orders">Только Заказы</SelectItem>
+                  <SelectItem value="email">Только С почты</SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
+          </div>
+          <div className="flex gap-2 justify-end pt-2">
+            <Button variant="outline" onClick={() => setShowForm(false)}>Отмена</Button>
+            <Button onClick={submit} disabled={createMut.isPending || updateMut.isPending}>{editItem ? "Сохранить" : "Добавить"}</Button>
+          </div>
+        </DialogContent>
+      </Dialog>
+    </div>
+  );
+}
+
+// ─── Brands & Models Tab ──────────────────────────────────────────────────────
+function BrandsTab() {
+  const { toast } = useToast();
+  const { data: brands = [] } = useQuery<DeviceBrand[]>({
+    queryKey: ["/api/device-brands"],
+    queryFn: async () => { const r = await apiRequest("GET", "/api/device-brands"); return r.ok ? r.json() : []; },
+  });
+
+  const [selectedBrand, setSelectedBrand] = useState<DeviceBrand | null>(null);
+  const { data: models = [] } = useQuery<DeviceModelRepair[]>({
+    queryKey: ["/api/device-models-repair", selectedBrand?.id],
+    queryFn: async () => {
+      if (!selectedBrand) return [];
+      const r = await apiRequest("GET", `/api/device-models-repair?brandId=${selectedBrand.id}`);
+      return r.ok ? r.json() : [];
+    },
+    enabled: !!selectedBrand,
+  });
+
+  const [brandInput, setBrandInput] = useState("");
+  const [modelInput, setModelInput] = useState("");
+
+  const addBrand = useMutation({
+    mutationFn: (name: string) => apiRequest("POST", "/api/device-brands", { name }),
+    onSuccess: () => { queryClient.invalidateQueries({ queryKey: ["/api/device-brands"] }); toast({ title: "Марка добавлена" }); setBrandInput(""); },
+  });
+  const delBrand = useMutation({
+    mutationFn: (id: number) => apiRequest("DELETE", `/api/device-brands/${id}`),
+    onSuccess: () => { queryClient.invalidateQueries({ queryKey: ["/api/device-brands"] }); setSelectedBrand(null); },
+  });
+  const addModel = useMutation({
+    mutationFn: (name: string) => apiRequest("POST", "/api/device-models-repair", { brandId: selectedBrand!.id, name }),
+    onSuccess: () => { queryClient.invalidateQueries({ queryKey: ["/api/device-models-repair", selectedBrand?.id] }); toast({ title: "Модель добавлена" }); setModelInput(""); },
+  });
+  const delModel = useMutation({
+    mutationFn: (id: number) => apiRequest("DELETE", `/api/device-models-repair/${id}`),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ["/api/device-models-repair", selectedBrand?.id] }),
+  });
+
+  return (
+    <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+      {/* Марки */}
+      <div>
+        <h3 className="font-semibold text-sm mb-3">Марки устройств</h3>
+        <div className="flex gap-2 mb-3">
+          <Input value={brandInput} onChange={e => setBrandInput(e.target.value)} placeholder="Название марки" className="flex-1"
+            onKeyDown={e => e.key === "Enter" && brandInput.trim() && addBrand.mutate(brandInput.trim())} />
+          <Button size="sm" onClick={() => brandInput.trim() && addBrand.mutate(brandInput.trim())} disabled={addBrand.isPending}><Plus className="w-4 h-4" /></Button>
+        </div>
+        <div className="space-y-1.5 max-h-80 overflow-y-auto">
+          {brands.map(b => (
+            <div key={b.id} className={`flex items-center gap-2 px-3 py-2 rounded-lg border cursor-pointer transition-colors ${selectedBrand?.id === b.id ? "bg-primary/10 border-primary" : "bg-card border-border hover:bg-muted"}`}
+              onClick={() => setSelectedBrand(b)}>
+              <Smartphone className="w-3.5 h-3.5 text-muted-foreground shrink-0" />
+              <span className="flex-1 text-sm">{b.name}</span>
+              <ChevronRight className="w-3.5 h-3.5 text-muted-foreground" />
+              <Button size="icon" variant="ghost" className="h-6 w-6 text-destructive hover:text-destructive shrink-0"
+                onClick={e => { e.stopPropagation(); delBrand.mutate(b.id); }}><Trash2 className="w-3 h-3" /></Button>
+            </div>
+          ))}
+          {brands.length === 0 && <p className="text-sm text-muted-foreground text-center py-4">Нет марок</p>}
+        </div>
+      </div>
+
+      {/* Модели */}
+      <div>
+        <h3 className="font-semibold text-sm mb-3">
+          {selectedBrand ? `Модели — ${selectedBrand.name}` : "Выберите марку →"}
+        </h3>
+        {selectedBrand ? (
+          <>
+            <div className="flex gap-2 mb-3">
+              <Input value={modelInput} onChange={e => setModelInput(e.target.value)} placeholder="Название модели" className="flex-1"
+                onKeyDown={e => e.key === "Enter" && modelInput.trim() && addModel.mutate(modelInput.trim())} />
+              <Button size="sm" onClick={() => modelInput.trim() && addModel.mutate(modelInput.trim())} disabled={addModel.isPending}><Plus className="w-4 h-4" /></Button>
+            </div>
+            <div className="space-y-1.5 max-h-80 overflow-y-auto">
+              {models.map(m => (
+                <div key={m.id} className="flex items-center gap-2 px-3 py-2 bg-card border border-border rounded-lg">
+                  <span className="flex-1 text-sm">{m.name}</span>
+                  <Button size="icon" variant="ghost" className="h-6 w-6 text-destructive hover:text-destructive"
+                    onClick={() => delModel.mutate(m.id)}><Trash2 className="w-3 h-3" /></Button>
+                </div>
+              ))}
+              {models.length === 0 && <p className="text-sm text-muted-foreground text-center py-4">Нет моделей</p>}
+            </div>
+          </>
+        ) : (
+          <div className="h-40 flex items-center justify-center text-muted-foreground text-sm border-2 border-dashed border-border rounded-lg">
+            Выберите марку слева
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+// ─── Issues Tab ────────────────────────────────────────────────────────────────
+function IssuesTab() {
+  const { toast } = useToast();
+  const { data: issues = [] } = useQuery<RepairIssue[]>({
+    queryKey: ["/api/repair-issues"],
+    queryFn: async () => { const r = await apiRequest("GET", "/api/repair-issues"); return r.ok ? r.json() : []; },
+  });
+
+  const [input, setInput] = useState("");
+  const [editItem, setEditItem] = useState<RepairIssue | null>(null);
+  const [editName, setEditName] = useState("");
+
+  const addMut = useMutation({
+    mutationFn: (name: string) => apiRequest("POST", "/api/repair-issues", { name }),
+    onSuccess: () => { queryClient.invalidateQueries({ queryKey: ["/api/repair-issues"] }); toast({ title: "Неисправность добавлена" }); setInput(""); },
+  });
+  const updateMut = useMutation({
+    mutationFn: ({ id, name }: any) => apiRequest("PUT", `/api/repair-issues/${id}`, { name }),
+    onSuccess: () => { queryClient.invalidateQueries({ queryKey: ["/api/repair-issues"] }); setEditItem(null); },
+  });
+  const deleteMut = useMutation({
+    mutationFn: (id: number) => apiRequest("DELETE", `/api/repair-issues/${id}`),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ["/api/repair-issues"] }),
+  });
+
+  return (
+    <div className="max-w-md">
+      <p className="text-sm text-muted-foreground mb-3">Список неисправностей для выбора при создании заказа</p>
+      <div className="flex gap-2 mb-4">
+        <Input value={input} onChange={e => setInput(e.target.value)} placeholder="Новая неисправность..."
+          onKeyDown={e => e.key === "Enter" && input.trim() && addMut.mutate(input.trim())} />
+        <Button size="sm" onClick={() => input.trim() && addMut.mutate(input.trim())} disabled={addMut.isPending}><Plus className="w-4 h-4" /></Button>
+      </div>
+      <div className="space-y-1.5">
+        {issues.map(issue => (
+          <div key={issue.id} className="flex items-center gap-2 px-3 py-2 bg-card border border-border rounded-lg">
+            {editItem?.id === issue.id ? (
+              <>
+                <Input value={editName} onChange={e => setEditName(e.target.value)} className="flex-1 h-7 text-sm"
+                  onKeyDown={e => { if (e.key === "Enter") updateMut.mutate({ id: issue.id, name: editName }); if (e.key === "Escape") setEditItem(null); }} />
+                <Button size="icon" variant="ghost" className="h-7 w-7 text-green-600" onClick={() => updateMut.mutate({ id: issue.id, name: editName })}><Check className="w-3.5 h-3.5" /></Button>
+                <Button size="icon" variant="ghost" className="h-7 w-7" onClick={() => setEditItem(null)}><X className="w-3.5 h-3.5" /></Button>
+              </>
+            ) : (
+              <>
+                <Tag className="w-3.5 h-3.5 text-muted-foreground shrink-0" />
+                <span className="flex-1 text-sm">{issue.name}</span>
+                <Button size="icon" variant="ghost" className="h-7 w-7" onClick={() => { setEditItem(issue); setEditName(issue.name); }}><Pencil className="w-3.5 h-3.5" /></Button>
+                <Button size="icon" variant="ghost" className="h-7 w-7 text-destructive hover:text-destructive" onClick={() => deleteMut.mutate(issue.id)}><Trash2 className="w-3.5 h-3.5" /></Button>
+              </>
+            )}
+          </div>
+        ))}
+        {issues.length === 0 && <p className="text-sm text-muted-foreground text-center py-4">Нет неисправностей</p>}
+      </div>
+    </div>
+  );
+}
+
 // ─── Main Admin Page ──────────────────────────────────────────────────────
 export default function AdminPage() {
   const { data: requests } = useQuery<ChangeRequest[]>({
@@ -1001,6 +1255,15 @@ export default function AdminPage() {
           <TabsTrigger value="users" className="gap-2">
             <Users className="w-4 h-4" /> Сотрудники
           </TabsTrigger>
+          <TabsTrigger value="statuses" className="gap-2">
+            <AlertCircle className="w-4 h-4" /> Статусы
+          </TabsTrigger>
+          <TabsTrigger value="brands" className="gap-2">
+            <Smartphone className="w-4 h-4" /> Марки и модели
+          </TabsTrigger>
+          <TabsTrigger value="issues" className="gap-2">
+            <Tag className="w-4 h-4" /> Неисправности
+          </TabsTrigger>
         </TabsList>
 
         <TabsContent value="requests"><RequestsTab /></TabsContent>
@@ -1008,6 +1271,9 @@ export default function AdminPage() {
         <TabsContent value="models"><ModelsTab /></TabsContent>
         <TabsContent value="suppliers"><SuppliersAdminTab /></TabsContent>
         <TabsContent value="users"><UsersTab /></TabsContent>
+        <TabsContent value="statuses"><StatusesTab /></TabsContent>
+        <TabsContent value="brands"><BrandsTab /></TabsContent>
+        <TabsContent value="issues"><IssuesTab /></TabsContent>
       </Tabs>
     </div>
   );

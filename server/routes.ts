@@ -598,4 +598,83 @@ export function registerRoutes(httpServer: Server, app: Express) {
     storage.deleteSalary(parseInt(req.params.id));
     res.json({ ok: true });
   });
+
+  // ─── Repair Statuses ──────────────────────────────────────────────────────────
+  app.get("/api/repair-statuses", authenticateToken, (req: AuthRequest, res: Response) => {
+    const { scope } = req.query as { scope?: string };
+    res.json(storage.getRepairStatuses(scope));
+  });
+  app.post("/api/repair-statuses", authenticateToken, requireAdmin, (req: AuthRequest, res: Response) => {
+    const { key, label, color, scope, sortOrder } = req.body;
+    if (!key || !label) return res.status(400).json({ error: "key и label обязательны" });
+    const item = storage.createRepairStatus({ key, label, color: color || "bg-gray-500 text-white", scope: scope || "both", sortOrder: sortOrder ?? 0 });
+    res.json(item);
+  });
+  app.put("/api/repair-statuses/:id", authenticateToken, requireAdmin, (req: AuthRequest, res: Response) => {
+    const result = storage.updateRepairStatus(parseInt(req.params.id), req.body);
+    if (!result) return res.status(404).json({ error: "Не найдено" });
+    res.json(result);
+  });
+  app.delete("/api/repair-statuses/:id", authenticateToken, requireAdmin, (req: AuthRequest, res: Response) => {
+    storage.deleteRepairStatus(parseInt(req.params.id));
+    res.json({ ok: true });
+  });
+
+  // ─── Device Brands ────────────────────────────────────────────────────────────
+  app.get("/api/device-brands", authenticateToken, (req: AuthRequest, res: Response) => {
+    res.json(storage.getDeviceBrands());
+  });
+  app.post("/api/device-brands", authenticateToken, requireAdmin, (req: AuthRequest, res: Response) => {
+    const { name, sortOrder } = req.body;
+    if (!name) return res.status(400).json({ error: "Название обязательно" });
+    res.json(storage.createDeviceBrand({ name, sortOrder: sortOrder ?? 0 }));
+  });
+  app.put("/api/device-brands/:id", authenticateToken, requireAdmin, (req: AuthRequest, res: Response) => {
+    const result = storage.updateDeviceBrand(parseInt(req.params.id), req.body);
+    if (!result) return res.status(404).json({ error: "Не найдено" });
+    res.json(result);
+  });
+  app.delete("/api/device-brands/:id", authenticateToken, requireAdmin, (req: AuthRequest, res: Response) => {
+    storage.deleteDeviceBrand(parseInt(req.params.id));
+    res.json({ ok: true });
+  });
+
+  // ─── Device Models Repair ─────────────────────────────────────────────────────
+  app.get("/api/device-models-repair", authenticateToken, (req: AuthRequest, res: Response) => {
+    const { brandId } = req.query as { brandId?: string };
+    res.json(storage.getDeviceModelsRepair(brandId ? parseInt(brandId) : undefined));
+  });
+  app.post("/api/device-models-repair", authenticateToken, requireAdmin, (req: AuthRequest, res: Response) => {
+    const { brandId, name, sortOrder } = req.body;
+    if (!brandId || !name) return res.status(400).json({ error: "brandId и name обязательны" });
+    res.json(storage.createDeviceModelRepair({ brandId: parseInt(brandId), name, sortOrder: sortOrder ?? 0 }));
+  });
+  app.put("/api/device-models-repair/:id", authenticateToken, requireAdmin, (req: AuthRequest, res: Response) => {
+    const result = storage.updateDeviceModelRepair(parseInt(req.params.id), req.body);
+    if (!result) return res.status(404).json({ error: "Не найдено" });
+    res.json(result);
+  });
+  app.delete("/api/device-models-repair/:id", authenticateToken, requireAdmin, (req: AuthRequest, res: Response) => {
+    storage.deleteDeviceModelRepair(parseInt(req.params.id));
+    res.json({ ok: true });
+  });
+
+  // ─── Repair Issues ────────────────────────────────────────────────────────────
+  app.get("/api/repair-issues", authenticateToken, (req: AuthRequest, res: Response) => {
+    res.json(storage.getRepairIssues());
+  });
+  app.post("/api/repair-issues", authenticateToken, requireAdmin, (req: AuthRequest, res: Response) => {
+    const { name, sortOrder } = req.body;
+    if (!name) return res.status(400).json({ error: "Название обязательно" });
+    res.json(storage.createRepairIssue({ name, sortOrder: sortOrder ?? 0 }));
+  });
+  app.put("/api/repair-issues/:id", authenticateToken, requireAdmin, (req: AuthRequest, res: Response) => {
+    const result = storage.updateRepairIssue(parseInt(req.params.id), req.body);
+    if (!result) return res.status(404).json({ error: "Не найдено" });
+    res.json(result);
+  });
+  app.delete("/api/repair-issues/:id", authenticateToken, requireAdmin, (req: AuthRequest, res: Response) => {
+    storage.deleteRepairIssue(parseInt(req.params.id));
+    res.json({ ok: true });
+  });
 }

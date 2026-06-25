@@ -248,3 +248,46 @@ export const salaries = sqliteTable("salaries", {
 export const insertSalarySchema = createInsertSchema(salaries).omit({ id: true });
 export type InsertSalary = z.infer<typeof insertSalarySchema>;
 export type Salary = typeof salaries.$inferSelect;
+
+// ─── Repair Statuses (управляемые через админку) ─────────────────────────────
+export const repairStatuses = sqliteTable("repair_statuses", {
+  id: integer("id").primaryKey({ autoIncrement: true }),
+  key: text("key").notNull().unique(),       // "новая", "в_работе" и т.д.
+  label: text("label").notNull(),            // "Новая", "В работе"
+  color: text("color").notNull().default("bg-gray-500 text-white"),
+  scope: text("scope").notNull().default("both"), // "orders" | "email" | "both"
+  sortOrder: integer("sort_order").notNull().default(0),
+});
+export const insertRepairStatusSchema = createInsertSchema(repairStatuses).omit({ id: true });
+export type InsertRepairStatus = z.infer<typeof insertRepairStatusSchema>;
+export type RepairStatus = typeof repairStatuses.$inferSelect;
+
+// ─── Device Brands & Models ───────────────────────────────────────────────────
+export const deviceBrands = sqliteTable("device_brands", {
+  id: integer("id").primaryKey({ autoIncrement: true }),
+  name: text("name").notNull(),
+  sortOrder: integer("sort_order").notNull().default(0),
+});
+export const insertDeviceBrandSchema = createInsertSchema(deviceBrands).omit({ id: true });
+export type InsertDeviceBrand = z.infer<typeof insertDeviceBrandSchema>;
+export type DeviceBrand = typeof deviceBrands.$inferSelect;
+
+export const deviceModelsRepair = sqliteTable("device_models_repair", {
+  id: integer("id").primaryKey({ autoIncrement: true }),
+  brandId: integer("brand_id").notNull(),
+  name: text("name").notNull(),
+  sortOrder: integer("sort_order").notNull().default(0),
+});
+export const insertDeviceModelRepairSchema = createInsertSchema(deviceModelsRepair).omit({ id: true });
+export type InsertDeviceModelRepair = z.infer<typeof insertDeviceModelRepairSchema>;
+export type DeviceModelRepair = typeof deviceModelsRepair.$inferSelect;
+
+// ─── Repair Issues (неисправности) ───────────────────────────────────────────
+export const repairIssues = sqliteTable("repair_issues", {
+  id: integer("id").primaryKey({ autoIncrement: true }),
+  name: text("name").notNull(),
+  sortOrder: integer("sort_order").notNull().default(0),
+});
+export const insertRepairIssueSchema = createInsertSchema(repairIssues).omit({ id: true });
+export type InsertRepairIssue = z.infer<typeof insertRepairIssueSchema>;
+export type RepairIssue = typeof repairIssues.$inferSelect;
