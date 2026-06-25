@@ -88,6 +88,7 @@ sqlite.exec(`
     created_at TEXT NOT NULL
   );
   CREATE TABLE IF NOT EXISTS sessions (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
     user_id INTEGER NOT NULL UNIQUE,
     session_id TEXT NOT NULL,
     created_at TEXT NOT NULL
@@ -197,11 +198,25 @@ sqlite.exec(`
   );
 `);
 
-// ─── Фикс старой базы: пересоздать sessions если нет колонки id ──────────────
+// ─── Фикс старой базы: пересоздать sessions если нет колонки id или UNIQUE constraint ─────
 try {
   const cols = sqlite.prepare("PRAGMA table_info(sessions)").all() as any[];
   const hasId = cols.some((c: any) => c.name === "id");
-  if (!hasId) {
+  // Проверяем UNIQUE index на user_id
+  const indexes = sqlite.prepare("PRAGMA index_list(sessions)").all() as any[];
+  let hasUniqueUserId = false;
+  for (const idx of indexes) {
+    const idxInfo = sqlite.prepare(`PRAGMA index_info(${idx.name})`).all() as any[];
+    if (idx.unique && idxInfo.some((c: any) => c.name === "user_id")) {
+      hasUniqueUserId = true;
+      break;
+    }
+  }
+  // Также проверяем через PRAGMA table_info — если user_id есть pk=1 или notnull+unique в DDL
+  const userIdCol = cols.find((c: any) => c.name === "user_id");
+  if (!hasId || !hasUniqueUserId) {
+    // Сохраняем существующие сессии
+    const existingSessions = sqlite.prepare("SELECT user_id, session_id, created_at FROM sessions").all() as any[];
     sqlite.exec(`
       DROP TABLE IF EXISTS sessions;
       CREATE TABLE sessions (
@@ -211,8 +226,15 @@ try {
         created_at TEXT NOT NULL
       );
     `);
+    // Восстанавливаем сессии
+    const ins = sqlite.prepare("INSERT OR REPLACE INTO sessions (user_id, session_id, created_at) VALUES (?, ?, ?)");
+    for (const s of existingSessions) {
+      ins.run(s.user_id, s.session_id, s.created_at);
+    }
   }
-} catch {}
+} catch (e) {
+  console.error("[sessions migration error]", e);
+}
 
 // Seed default data if empty
 function seedIfEmpty() {
