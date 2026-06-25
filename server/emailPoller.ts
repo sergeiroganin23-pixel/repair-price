@@ -92,20 +92,36 @@ async function pollOnce() {
     connection = await imapSimple.connect(IMAP_CONFIG);
     await connection.openBox("INBOX");
 
-    // Ищем все письма, которые содержат слово "заявку" в теме
-    // Или от квиз-сервиса
-    const searchCriteria = [["SUBJECT", "заявк"]];
+    // Ищем все письма от Envybox (от kwidget@envybox.io или noreply@envybox.io)
+    // Также пробуем ALL как fallback
+    const since = new Date();
+    since.setDate(since.getDate() - 30); // за последние 30 дней
+    const searchCriteria = [["SINCE", since]];
     const fetchOptions = {
       bodies: ["HEADER", "TEXT", ""],
-      markSeen: true,
+      markSeen: false, // не помечаем как прочитанные автоматически
     };
 
     const messages = await connection.search(searchCriteria, fetchOptions);
     let newCount = 0;
 
+    log(`[emailPoller] Найдено писем: ${messages.length}`);
+
     for (const msg of messages) {
-      // Получаем message-id
+      // Фильтруем по теме на стороне Node.js (кириллица в IMAP-запросе не всегда работает)
       const headerPart = msg.parts.find((p: any) => p.which === "HEADER");
+      const subjectArr = headerPart?.body?.subject || headerPart?.body?.Subject || [];
+      const subject = (Array.isArray(subjectArr) ? subjectArr[0] : subjectArr) || "";
+      const subjectLower = subject.toLowerCase();
+      const isQuizLead =
+        subjectLower.includes("заявк") ||
+        subjectLower.includes("quiz") ||
+        subjectLower.includes("виджет") ||
+        subjectLower.includes("квиз");
+      if (!isQuizLead) continue;
+      log(`[emailPoller] Обрабатываю: ${subject}`);
+
+      // Получаем message-id
       const headers = headerPart?.body || {};
       const midArr = (headers["message-id"] || headers["Message-ID"] || []);
       const rawMessageId = Array.isArray(midArr) ? (midArr[0] || "") : String(midArr);
