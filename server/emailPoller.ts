@@ -142,13 +142,15 @@ async function pollOnce() {
 
       const fields = parseQuizEmail(textContent, parsed.subject || "");
 
-      storage.createOrder({
+      const now = (parsed.date || new Date()).toISOString();
+      storage.createRepair({
         messageId,
         ...fields,
+        source: "email",
         status: "новая",
         called: false,
-        assignedTo: null,
-        createdAt: (parsed.date || new Date()).toISOString(),
+        createdAt: now,
+        updatedAt: now,
       });
 
       newCount++;

@@ -295,18 +295,97 @@ export function registerRoutes(httpServer: Server, app: Express) {
     res.json({ id: user.id, username: user.username, role: user.role, displayName: user.displayName });
   });
 
-  // ─── Orders (Email Leads) ────────────────────────────────────────────────
-  // GET /api/orders — список всех заявок (требует авторизации)
+  // ─── Repairs (Заявки/Ремонты) ───────────────────────────────────────────────
+  app.get("/api/repairs", authenticateToken, (req: AuthRequest, res: Response) => {
+    res.json(storage.getRepairs());
+  });
+
+  app.get("/api/repairs/new-count", authenticateToken, (req: AuthRequest, res: Response) => {
+    res.json({ count: storage.getNewRepairsCount() });
+  });
+
+  app.get("/api/repairs/:id", authenticateToken, (req: AuthRequest, res: Response) => {
+    const repair = storage.getRepairById(parseInt(req.params.id));
+    if (!repair) return res.status(404).json({ error: "Заявка не найдена" });
+    res.json(repair);
+  });
+
+  app.post("/api/repairs", authenticateToken, (req: AuthRequest, res: Response) => {
+    const { clientName, phone, deviceType, brand, model, imei, appearance, issue,
+            estimatedPrice, finalPrice, prepayment, deadline, warranty,
+            masterId, masterComment, status, clientId, discount } = req.body;
+    if (!clientName && !clientId) {
+      return res.status(400).json({ error: "Укажите клиента" });
+    }
+    // Автоматически создаём или находим клиента по телефону
+    let resolvedClientId = clientId || null;
+    if (phone && !resolvedClientId) {
+      const existing = storage.getClientByPhone(phone);
+      if (existing) {
+        resolvedClientId = existing.id;
+      } else if (clientName) {
+        const newClient = storage.createClient({
+          name: clientName,
+          phone: phone || "",
+          email: null,
+          notes: null,
+          createdAt: new Date().toISOString(),
+        });
+        resolvedClientId = newClient.id;
+      }
+    }
+    const now = new Date().toISOString();
+    const repair = storage.createRepair({
+      clientId: resolvedClientId,
+      clientName: clientName || null,
+      phone: phone || null,
+      deviceType: deviceType || null,
+      brand: brand || null,
+      model: model || null,
+      imei: imei || null,
+      appearance: appearance || null,
+      issue: issue || null,
+      estimatedPrice: estimatedPrice || null,
+      finalPrice: finalPrice || null,
+      prepayment: prepayment || null,
+      deadline: deadline || null,
+      warranty: warranty || null,
+      masterId: masterId || null,
+      masterComment: masterComment || null,
+      status: status || "новая",
+      called: false,
+      source: "manual",
+      messageId: null,
+      sourceUrl: null,
+      discount: discount || null,
+      rawText: null,
+      location: null,
+      createdAt: now,
+      updatedAt: now,
+    });
+    res.json(repair);
+  });
+
+  app.put("/api/repairs/:id", authenticateToken, (req: AuthRequest, res: Response) => {
+    const id = parseInt(req.params.id);
+    const result = storage.updateRepair(id, req.body);
+    if (!result) return res.status(404).json({ error: "Заявка не найдена" });
+    res.json(result);
+  });
+
+  app.delete("/api/repairs/:id", authenticateToken, requireAdmin, (req: AuthRequest, res: Response) => {
+    const id = parseInt(req.params.id);
+    storage.updateRepair(id, { status: "отказ" }); // мягкое удаление
+    res.json({ ok: true });
+  });
+
+  // Алиасы /api/orders для совместимости с фронтендом
   app.get("/api/orders", authenticateToken, (req: AuthRequest, res: Response) => {
-    res.json(storage.getOrders());
+    res.json(storage.getRepairs());
   });
-
-  // GET /api/orders/new-count — количество новых заявок (для polling)
   app.get("/api/orders/new-count", authenticateToken, (req: AuthRequest, res: Response) => {
-    res.json({ count: storage.getNewOrdersCount() });
+    res.json({ count: storage.getNewRepairsCount() });
   });
-
-  // PUT /api/orders/:id/status — смена статуса
   app.put("/api/orders/:id/status", authenticateToken, (req: AuthRequest, res: Response) => {
     const id = parseInt(req.params.id);
     const { status } = req.body;
@@ -314,20 +393,55 @@ export function registerRoutes(httpServer: Server, app: Express) {
     if (!status || !validStatuses.includes(status)) {
       return res.status(400).json({ error: "Недопустимый статус" });
     }
-    const result = storage.updateOrderStatus(id, status);
+    const result = storage.updateRepair(id, { status });
     if (!result) return res.status(404).json({ error: "Заявка не найдена" });
     res.json(result);
   });
-
-  // PUT /api/orders/:id/called — отметка прозвонил/не прозвонил
   app.put("/api/orders/:id/called", authenticateToken, (req: AuthRequest, res: Response) => {
     const id = parseInt(req.params.id);
     const { called } = req.body;
     if (typeof called !== "boolean") {
       return res.status(400).json({ error: "called должен быть boolean" });
     }
-    const result = storage.updateOrderCalled(id, called);
+    const result = storage.updateRepair(id, { called });
     if (!result) return res.status(404).json({ error: "Заявка не найдена" });
     res.json(result);
+  });
+
+  // ─── Clients (База клиентов) ─────────────────────────────────────────────────
+  app.get("/api/clients", authenticateToken, (req: AuthRequest, res: Response) => {
+    const q = req.query.q as string | undefined;
+    if (q) return res.json(storage.searchClients(q));
+    res.json(storage.getClients());
+  });
+
+  app.get("/api/clients/:id", authenticateToken, (req: AuthRequest, res: Response) => {
+    const client = storage.getClientById(parseInt(req.params.id));
+    if (!client) return res.status(404).json({ error: "Клиент не найден" });
+    res.json(client);
+  });
+
+  app.get("/api/clients/:id/repairs", authenticateToken, (req: AuthRequest, res: Response) => {
+    res.json(storage.getRepairsByClient(parseInt(req.params.id)));
+  });
+
+  app.post("/api/clients", authenticateToken, (req: AuthRequest, res: Response) => {
+    const { name, phone, email, notes } = req.body;
+    if (!name || !phone) return res.status(400).json({ error: "Имя и телефон обязательны" });
+    const existing = storage.getClientByPhone(phone);
+    if (existing) return res.status(409).json({ error: "Клиент с таким телефоном уже существует", client: existing });
+    const client = storage.createClient({ name, phone, email: email || null, notes: notes || null, createdAt: new Date().toISOString() });
+    res.json(client);
+  });
+
+  app.put("/api/clients/:id", authenticateToken, (req: AuthRequest, res: Response) => {
+    const result = storage.updateClient(parseInt(req.params.id), req.body);
+    if (!result) return res.status(404).json({ error: "Клиент не найден" });
+    res.json(result);
+  });
+
+  app.delete("/api/clients/:id", authenticateToken, requireAdmin, (req: AuthRequest, res: Response) => {
+    storage.deleteClient(parseInt(req.params.id));
+    res.json({ ok: true });
   });
 }

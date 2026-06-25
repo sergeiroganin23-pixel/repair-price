@@ -2,7 +2,7 @@ import { drizzle } from "drizzle-orm/better-sqlite3";
 import Database from "better-sqlite3";
 import { eq, desc } from "drizzle-orm";
 import {
-  users, categories, subcategories, deviceModels, services, suppliers, changeRequests, orders, sessions,
+  users, categories, subcategories, deviceModels, services, suppliers, changeRequests, repairs, sessions, clients,
   type User, type InsertUser,
   type Category, type InsertCategory,
   type Subcategory, type InsertSubcategory,
@@ -10,7 +10,8 @@ import {
   type Service, type InsertService,
   type Supplier, type InsertSupplier,
   type ChangeRequest, type InsertChangeRequest,
-  type Order, type InsertOrder,
+  type Repair, type InsertRepair,
+  type Client, type InsertClient,
   type Session,
 } from "@shared/schema";
 import bcrypt from "bcryptjs";
@@ -85,6 +86,43 @@ sqlite.exec(`
     user_id INTEGER NOT NULL UNIQUE,
     session_id TEXT NOT NULL,
     created_at TEXT NOT NULL
+  );
+  CREATE TABLE IF NOT EXISTS clients (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    name TEXT NOT NULL,
+    phone TEXT NOT NULL,
+    email TEXT,
+    notes TEXT,
+    created_at TEXT NOT NULL
+  );
+  CREATE TABLE IF NOT EXISTS repairs (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    client_id INTEGER,
+    client_name TEXT,
+    phone TEXT,
+    device_type TEXT,
+    brand TEXT,
+    model TEXT,
+    imei TEXT,
+    appearance TEXT,
+    issue TEXT,
+    estimated_price REAL,
+    final_price REAL,
+    prepayment REAL,
+    deadline TEXT,
+    warranty TEXT,
+    master_id INTEGER,
+    master_comment TEXT,
+    status TEXT NOT NULL DEFAULT 'новая',
+    called INTEGER NOT NULL DEFAULT 0,
+    source TEXT NOT NULL DEFAULT 'manual',
+    message_id TEXT,
+    source_url TEXT,
+    discount TEXT,
+    raw_text TEXT,
+    location TEXT,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
   );
   CREATE TABLE IF NOT EXISTS orders (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -245,14 +283,32 @@ export interface IStorage {
   getSession(userId: number): Session | undefined;
   deleteSession(userId: number): void;
 
-  // Orders
-  getOrders(): Order[];
+  // Clients
+  getClients(): Client[];
+  searchClients(query: string): Client[];
+  getClientById(id: number): Client | undefined;
+  getClientByPhone(phone: string): Client | undefined;
+  createClient(data: InsertClient): Client;
+  updateClient(id: number, data: Partial<InsertClient>): Client | undefined;
+  deleteClient(id: number): void;
+
+  // Repairs (полные карточки ремонта)
+  getRepairs(): Repair[];
+  getNewRepairsCount(): number;
+  getRepairById(id: number): Repair | undefined;
+  getRepairsByClient(clientId: number): Repair[];
+  createRepair(data: InsertRepair): Repair;
+  updateRepair(id: number, data: Partial<InsertRepair>): Repair | undefined;
+  repairExists(messageId: string): boolean;
+
+  // Orders (алиас для совместимости с emailPoller)
+  getOrders(): Repair[];
   getNewOrdersCount(): number;
-  getOrderById(id: number): Order | undefined;
-  createOrder(data: InsertOrder): Order;
+  getOrderById(id: number): Repair | undefined;
+  createOrder(data: InsertRepair): Repair;
   orderExists(messageId: string): boolean;
-  updateOrderStatus(id: number, status: string): Order | undefined;
-  updateOrderCalled(id: number, called: boolean): Order | undefined;
+  updateOrderStatus(id: number, status: string): Repair | undefined;
+  updateOrderCalled(id: number, called: boolean): Repair | undefined;
 }
 
 export class SQLiteStorage implements IStorage {
@@ -375,28 +431,69 @@ export class SQLiteStorage implements IStorage {
     db.delete(sessions).where(eq(sessions.userId, userId)).run();
   }
 
-  // ─── Orders ───────────────────────────────────────────────────────────────────────
-  getOrders() {
-    return db.select().from(orders).orderBy(desc(orders.createdAt)).all();
+  // ─── Clients ──────────────────────────────────────────────────────────────────
+  getClients() {
+    return db.select().from(clients).orderBy(desc(clients.createdAt)).all();
   }
-  getNewOrdersCount() {
-    return db.select().from(orders).where(eq(orders.status, "новая")).all().length;
+  searchClients(query: string) {
+    const q = query.toLowerCase();
+    return db.select().from(clients).all().filter(c =>
+      c.name.toLowerCase().includes(q) || c.phone.includes(q) || (c.email || "").toLowerCase().includes(q)
+    );
   }
-  getOrderById(id: number) {
-    return db.select().from(orders).where(eq(orders.id, id)).get();
+  getClientById(id: number) {
+    return db.select().from(clients).where(eq(clients.id, id)).get();
   }
-  createOrder(data: InsertOrder) {
-    return db.insert(orders).values(data).returning().get();
+  getClientByPhone(phone: string) {
+    // нормализуем: убираем всё кроме цифр
+    const digits = phone.replace(/\D/g, "");
+    return db.select().from(clients).all().find(c => c.phone.replace(/\D/g, "") === digits);
   }
-  orderExists(messageId: string) {
-    const row = db.select().from(orders).where(eq(orders.messageId, messageId)).get();
+  createClient(data: InsertClient) {
+    return db.insert(clients).values(data).returning().get();
+  }
+  updateClient(id: number, data: Partial<InsertClient>) {
+    return db.update(clients).set(data).where(eq(clients.id, id)).returning().get();
+  }
+  deleteClient(id: number) {
+    db.delete(clients).where(eq(clients.id, id)).run();
+  }
+
+  // ─── Repairs ──────────────────────────────────────────────────────────────────
+  getRepairs() {
+    return db.select().from(repairs).orderBy(desc(repairs.createdAt)).all();
+  }
+  getNewRepairsCount() {
+    return db.select().from(repairs).where(eq(repairs.status, "новая")).all().length;
+  }
+  getRepairById(id: number) {
+    return db.select().from(repairs).where(eq(repairs.id, id)).get();
+  }
+  getRepairsByClient(clientId: number) {
+    return db.select().from(repairs).where(eq(repairs.clientId, clientId)).orderBy(desc(repairs.createdAt)).all();
+  }
+  createRepair(data: InsertRepair) {
+    return db.insert(repairs).values(data).returning().get();
+  }
+  updateRepair(id: number, data: Partial<InsertRepair>) {
+    return db.update(repairs).set({ ...data, updatedAt: new Date().toISOString() }).where(eq(repairs.id, id)).returning().get();
+  }
+  repairExists(messageId: string) {
+    const row = db.select().from(repairs).where(eq(repairs.messageId, messageId)).get();
     return !!row;
   }
+
+  // Orders — алиасы для обратной совместимости с emailPoller
+  getOrders() { return this.getRepairs(); }
+  getNewOrdersCount() { return this.getNewRepairsCount(); }
+  getOrderById(id: number) { return this.getRepairById(id); }
+  createOrder(data: InsertRepair) { return this.createRepair(data); }
+  orderExists(messageId: string) { return this.repairExists(messageId); }
   updateOrderStatus(id: number, status: string) {
-    return db.update(orders).set({ status }).where(eq(orders.id, id)).returning().get();
+    return this.updateRepair(id, { status });
   }
   updateOrderCalled(id: number, called: boolean) {
-    return db.update(orders).set({ called }).where(eq(orders.id, id)).returning().get();
+    return this.updateRepair(id, { called });
   }
 }
 

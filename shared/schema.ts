@@ -83,28 +83,68 @@ export const insertSupplierSchema = createInsertSchema(suppliers).omit({ id: tru
 export type InsertSupplier = z.infer<typeof insertSupplierSchema>;
 export type Supplier = typeof suppliers.$inferSelect;
 
-// ─── Orders (email quiz leads) ──────────────────────────────────────────────
-export const orders = sqliteTable("orders", {
+// ─── Clients ──────────────────────────────────────────────────────────────────
+export const clients = sqliteTable("clients", {
   id: integer("id").primaryKey({ autoIncrement: true }),
-  messageId: text("message_id").notNull().unique(), // unique email message-id
-  clientName: text("client_name"),
-  phone: text("phone"),
-  discount: text("discount"),
-  device: text("device"),
-  brand: text("brand"),
-  issue: text("issue"),
-  location: text("location"),
-  sourceUrl: text("source_url"),
-  rawText: text("raw_text"),
-  status: text("status").notNull().default("новая"), // новая | в_работе | готово | отказ | записал
-  called: integer("called", { mode: "boolean" }).notNull().default(false),
-  assignedTo: integer("assigned_to"),
+  name: text("name").notNull(),
+  phone: text("phone").notNull(),
+  email: text("email"),
+  notes: text("notes"),
   createdAt: text("created_at").notNull(),
 });
 
-export const insertOrderSchema = createInsertSchema(orders).omit({ id: true });
-export type InsertOrder = z.infer<typeof insertOrderSchema>;
-export type Order = typeof orders.$inferSelect;
+export const insertClientSchema = createInsertSchema(clients).omit({ id: true });
+export type InsertClient = z.infer<typeof insertClientSchema>;
+export type Client = typeof clients.$inferSelect;
+
+// ─── Repairs (полная карточка ремонта) ────────────────────────────────────────
+export const repairs = sqliteTable("repairs", {
+  id: integer("id").primaryKey({ autoIncrement: true }),
+  // Клиент
+  clientId: integer("client_id"),           // привязка к клиенту (опционально)
+  clientName: text("client_name"),
+  phone: text("phone"),
+  // Устройство
+  deviceType: text("device_type"),          // Телефон, Планшет, Ноутбук...
+  brand: text("brand"),
+  model: text("model"),
+  imei: text("imei"),
+  appearance: text("appearance"),           // внешний вид при приёмке
+  issue: text("issue"),                     // неисправность
+  // Финансы
+  estimatedPrice: real("estimated_price"),  // предварительная стоимость
+  finalPrice: real("final_price"),          // итоговая стоимость
+  prepayment: real("prepayment"),           // предоплата
+  // Сроки и гарантия
+  deadline: text("deadline"),              // срок выдачи
+  warranty: text("warranty"),              // гарантия (например "30 дней")
+  // Работа
+  masterId: integer("master_id"),          // назначенный мастер
+  masterComment: text("master_comment"),   // комментарий мастера
+  // Статус
+  status: text("status").notNull().default("новая"),
+  // новая | в_работе | готово | отказ | записал
+  called: integer("called", { mode: "boolean" }).notNull().default(false),
+  // Источник
+  source: text("source").notNull().default("manual"), // manual | email
+  messageId: text("message_id"),           // если из почты — уникальный id письма
+  sourceUrl: text("source_url"),
+  discount: text("discount"),
+  rawText: text("raw_text"),
+  location: text("location"),
+  createdAt: text("created_at").notNull(),
+  updatedAt: text("updated_at").notNull(),
+});
+
+export const insertRepairSchema = createInsertSchema(repairs).omit({ id: true });
+export type InsertRepair = z.infer<typeof insertRepairSchema>;
+export type Repair = typeof repairs.$inferSelect;
+
+// Оставляем orders как алиас для обратной совместимости (старые письма)
+export const orders = repairs;
+export const insertOrderSchema = insertRepairSchema;
+export type InsertOrder = InsertRepair;
+export type Order = Repair;
 
 // ─── Change Requests ──────────────────────────────────────────────────────────
 export const changeRequests = sqliteTable("change_requests", {

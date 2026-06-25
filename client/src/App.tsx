@@ -12,9 +12,10 @@ import SuppliersPage from "@/pages/SuppliersPage";
 import AdminPage from "@/pages/AdminPage";
 import RequestModal from "@/pages/RequestModal";
 import OrdersPage from "@/pages/OrdersPage";
+import ClientsPage from "@/pages/ClientsPage";
 
 import {
-  LayoutList, Truck, ShieldCheck, LogOut, Sun, Moon, Bell,
+  LayoutList, Truck, ShieldCheck, LogOut, Sun, Moon, Bell, Users,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 
@@ -125,7 +126,7 @@ function useNewOrdersCount() {
   const [location] = useHashLocation();
 
   const { data } = useQuery<{ count: number }>({
-    queryKey: ["/api/orders/new-count"],
+    queryKey: ["/api/repairs/new-count"],
     refetchInterval: 30_000,
   });
 
@@ -167,6 +168,7 @@ function Layout({ children }: { children: React.ReactNode }) {
               label="Заявки"
               badge={newOrdersCount}
             />
+            <NavLink href="/clients" icon={<Users className="w-4 h-4" />} label="Клиенты" />
             {isAdmin && (
               <NavLink href="/admin" icon={<ShieldCheck className="w-4 h-4" />} label="Админ-панель" />
             )}
@@ -198,6 +200,7 @@ function Layout({ children }: { children: React.ReactNode }) {
           label="Заявки"
           badge={newOrdersCount}
         />
+        <NavLink href="/clients" icon={<Users className="w-4 h-4" />} label="Клиенты" />
         {isAdmin && (
           <NavLink href="/admin" icon={<ShieldCheck className="w-4 h-4" />} label="Админ" />
         )}
@@ -209,6 +212,7 @@ function Layout({ children }: { children: React.ReactNode }) {
           <Route path="/" component={() => <PriceListPage onRequestOpen={() => setRequestOpen(true)} />} />
           <Route path="/suppliers" component={SuppliersPage} />
           <Route path="/orders" component={OrdersPage} />
+          <Route path="/clients" component={ClientsPage} />
           {isAdmin && <Route path="/admin" component={AdminPage} />}
           <Route>
             <div className="text-center py-20 text-muted-foreground">Страница не найдена</div>
@@ -234,7 +238,7 @@ function AuthGate() {
       </>
     );
 
-  return <Layout><div /></Layout>;
+  return <Layout>{null}</Layout>;
 }
 
 export default function App() {
