@@ -1,10 +1,10 @@
-import { createContext, useContext, useState, useEffect, type ReactNode } from "react";
-import { apiRequest } from "./queryClient";
+import { createContext, useContext, useState, useEffect, ReactNode } from "react";
 
 interface AuthUser {
   id: number;
-  role: "admin" | "master";
+  role: string;
   displayName: string;
+  sessionId?: string;
 }
 
 interface AuthContextType {
@@ -12,103 +12,56 @@ interface AuthContextType {
   token: string | null;
   login: (token: string, user: AuthUser) => void;
   logout: () => void;
-  isAdmin: boolean;
+  isLoading: boolean;
 }
 
-const AuthContext = createContext<AuthContextType>({
-  user: null,
-  token: null,
-  login: () => {},
-  logout: () => {},
-  isAdmin: false,
-});
-
-const TOKEN_KEY = "repair_token";
-
-// module-level token для использования в queryClient
-let _token: string | null = null;
-
-export function getToken() {
-  return _token;
-}
+const AuthContext = createContext<AuthContextType | null>(null);
 
 export function AuthProvider({ children }: { children: ReactNode }) {
   const [user, setUser] = useState<AuthUser | null>(null);
   const [token, setToken] = useState<string | null>(null);
-  const [loading, setLoading] = useState(true);
+  const [isLoading, setIsLoading] = useState(true);
 
-  // Восстанавливаем сессию при загрузке страницы
   useEffect(() => {
-    const savedToken = localStorage.getItem(TOKEN_KEY);
+    const savedToken = localStorage.getItem("auth_token");
     if (savedToken) {
-      _token = savedToken;
-      // Проверяем что токен ещё действителен
-      apiRequest("GET", "/api/auth/me")
-        .then((res) => res.json())
-        .then((data) => {
-          if (data?.id) {
-            setUser({ id: data.id, role: data.role, displayName: data.displayName });
-            setToken(savedToken);
-          } else {
-            localStorage.removeItem(TOKEN_KEY);
-            _token = null;
-          }
+      fetch("/api/auth/me", { headers: { Authorization: `Bearer ${savedToken}` } })
+        .then(r => r.ok ? r.json() : null)
+        .then(data => {
+          if (data) { setToken(savedToken); setUser(data); }
+          else { localStorage.removeItem("auth_token"); }
         })
-        .catch(() => {
-          localStorage.removeItem(TOKEN_KEY);
-          _token = null;
-        })
-        .finally(() => setLoading(false));
+        .catch(() => localStorage.removeItem("auth_token"))
+        .finally(() => setIsLoading(false));
     } else {
-      setLoading(false);
+      setIsLoading(false);
     }
   }, []);
 
-  function login(newToken: string, newUser: AuthUser) {
-    _token = newToken;
-    localStorage.setItem(TOKEN_KEY, newToken);
-    setToken(newToken);
-    setUser(newUser);
-  }
+  const login = (t: string, u: AuthUser) => {
+    localStorage.setItem("auth_token", t);
+    setToken(t);
+    setUser(u);
+  };
 
-  function logout() {
-    // Уведомляем сервер о выходе (удаляем sessionId из БД)
-    if (_token) {
-      apiRequest("POST", "/api/auth/logout").catch(() => {});
+  const logout = () => {
+    if (token) {
+      fetch("/api/auth/logout", { method: "POST", headers: { Authorization: `Bearer ${token}` } }).catch(() => {});
     }
-    _token = null;
-    localStorage.removeItem(TOKEN_KEY);
+    localStorage.removeItem("auth_token");
     setToken(null);
     setUser(null);
-  }
-
-  // Слушаем глобальное событие "выкинуть из аккаунта" (401 с другого устройства)
-  useEffect(() => {
-    const handler = () => {
-      _token = null;
-      localStorage.removeItem(TOKEN_KEY);
-      setToken(null);
-      setUser(null);
-    };
-    window.addEventListener("auth:logout", handler);
-    return () => window.removeEventListener("auth:logout", handler);
-  }, []);
-
-  if (loading) {
-    return (
-      <div className="min-h-screen flex items-center justify-center">
-        <div className="w-8 h-8 border-2 border-primary border-t-transparent rounded-full animate-spin" />
-      </div>
-    );
-  }
+  };
 
   return (
-    <AuthContext.Provider value={{ user, token, login, logout, isAdmin: user?.role === "admin" }}>
+    <AuthContext.Provider value={{ user, token, login, logout, isLoading }}>
       {children}
     </AuthContext.Provider>
   );
 }
 
 export function useAuth() {
-  return useContext(AuthContext);
+  const ctx = useContext(AuthContext);
+  if (!ctx) throw new Error("useAuth must be used within AuthProvider");
+  return ctx;
 }

@@ -1,5 +1,5 @@
 import { QueryClient } from "@tanstack/react-query";
-import { getToken } from "./auth";
+// Token is read directly from localStorage
 
 // Port rewriting for deployment (injected by deploy_website)
 const PORT_PROXY = typeof __PORT_5000__ !== "undefined" ? __PORT_5000__ : "";
@@ -11,7 +11,7 @@ export async function apiRequest(
   path: string,
   body?: unknown
 ): Promise<Response> {
-  const token = getToken();
+  const token = localStorage.getItem("auth_token");
   const headers: Record<string, string> = {
     "Content-Type": "application/json",
   };
@@ -33,11 +33,6 @@ export const queryClient = new QueryClient({
       queryFn: async ({ queryKey }) => {
         const path = Array.isArray(queryKey) ? queryKey[0] as string : queryKey as string;
         const res = await apiRequest("GET", path);
-        if (res.status === 401) {
-          // Сессия завершена (вход с другого устройства или истёк токен)
-          window.dispatchEvent(new Event("auth:logout"));
-          throw new Error("Сессия завершена");
-        }
         if (!res.ok) {
           const err = await res.json().catch(() => ({ error: res.statusText }));
           throw new Error(err.error || "Ошибка запроса");

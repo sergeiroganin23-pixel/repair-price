@@ -1,9 +1,9 @@
 import { drizzle } from "drizzle-orm/better-sqlite3";
 import Database from "better-sqlite3";
-import { eq, desc } from "drizzle-orm";
+import { eq, desc, and, gte, lte } from "drizzle-orm";
 import {
-  users, categories, subcategories, deviceModels, services, suppliers, changeRequests, repairs, sessions, clients,
-  parts, partMovements, transactions,
+  users, sessions, categories, subcategories, deviceModels, services, suppliers, changeRequests, orders,
+  clients, repairs, parts, partMovements, transactions, salaries,
   type User, type InsertUser,
   type Category, type InsertCategory,
   type Subcategory, type InsertSubcategory,
@@ -11,16 +11,16 @@ import {
   type Service, type InsertService,
   type Supplier, type InsertSupplier,
   type ChangeRequest, type InsertChangeRequest,
-  type Repair, type InsertRepair,
+  type Order, type InsertOrder,
   type Client, type InsertClient,
-  type Session,
+  type Repair, type InsertRepair,
   type Part, type InsertPart,
   type PartMovement, type InsertPartMovement,
   type Transaction, type InsertTransaction,
+  type Salary, type InsertSalary,
 } from "@shared/schema";
 import bcrypt from "bcryptjs";
 
-// На Railway база хранится в /data (persistent volume), локально — в корне проекта
 const dbPath = process.env.RAILWAY_VOLUME_MOUNT_PATH
   ? `${process.env.RAILWAY_VOLUME_MOUNT_PATH}/data.db`
   : "data.db";
@@ -35,6 +35,12 @@ sqlite.exec(`
     password_hash TEXT NOT NULL,
     role TEXT NOT NULL DEFAULT 'master',
     display_name TEXT NOT NULL
+  );
+  CREATE TABLE IF NOT EXISTS sessions (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id INTEGER NOT NULL,
+    session_id TEXT NOT NULL UNIQUE,
+    created_at TEXT NOT NULL
   );
   CREATE TABLE IF NOT EXISTS categories (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -86,15 +92,27 @@ sqlite.exec(`
     admin_comment TEXT,
     created_at TEXT NOT NULL
   );
-  CREATE TABLE IF NOT EXISTS sessions (
-    user_id INTEGER NOT NULL UNIQUE,
-    session_id TEXT NOT NULL,
+  CREATE TABLE IF NOT EXISTS orders (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    message_id TEXT NOT NULL UNIQUE,
+    client_name TEXT,
+    phone TEXT,
+    discount TEXT,
+    device TEXT,
+    brand TEXT,
+    issue TEXT,
+    location TEXT,
+    source_url TEXT,
+    raw_text TEXT,
+    status TEXT NOT NULL DEFAULT 'новая',
+    called INTEGER NOT NULL DEFAULT 0,
+    assigned_to INTEGER,
     created_at TEXT NOT NULL
   );
   CREATE TABLE IF NOT EXISTS clients (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     name TEXT NOT NULL,
-    phone TEXT NOT NULL,
+    phone TEXT,
     email TEXT,
     notes TEXT,
     created_at TEXT NOT NULL
@@ -104,6 +122,7 @@ sqlite.exec(`
     client_id INTEGER,
     client_name TEXT,
     phone TEXT,
+    email TEXT,
     device_type TEXT,
     brand TEXT,
     model TEXT,
@@ -128,30 +147,13 @@ sqlite.exec(`
     created_at TEXT NOT NULL,
     updated_at TEXT NOT NULL
   );
-  CREATE TABLE IF NOT EXISTS orders (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    message_id TEXT NOT NULL UNIQUE,
-    client_name TEXT,
-    phone TEXT,
-    discount TEXT,
-    device TEXT,
-    brand TEXT,
-    issue TEXT,
-    location TEXT,
-    source_url TEXT,
-    raw_text TEXT,
-    status TEXT NOT NULL DEFAULT 'новая',
-    called INTEGER NOT NULL DEFAULT 0,
-    assigned_to INTEGER,
-    created_at TEXT NOT NULL
-  );
   CREATE TABLE IF NOT EXISTS parts (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     name TEXT NOT NULL,
     sku TEXT,
     category TEXT,
     quantity INTEGER NOT NULL DEFAULT 0,
-    min_quantity INTEGER DEFAULT 1,
+    min_quantity INTEGER NOT NULL DEFAULT 1,
     buy_price REAL,
     sell_price REAL,
     supplier_id INTEGER,
@@ -176,31 +178,61 @@ sqlite.exec(`
     category TEXT NOT NULL,
     description TEXT,
     repair_id INTEGER,
-    payment_method TEXT DEFAULT 'cash',
+    payment_method TEXT NOT NULL DEFAULT 'cash',
+    created_at TEXT NOT NULL,
+    date TEXT NOT NULL
+  );
+  CREATE TABLE IF NOT EXISTS salaries (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    master_id INTEGER NOT NULL,
+    master_name TEXT NOT NULL,
+    type TEXT NOT NULL,
+    amount REAL NOT NULL,
+    description TEXT,
+    repair_id INTEGER,
+    period TEXT NOT NULL,
+    payment_method TEXT NOT NULL DEFAULT 'cash',
+    paid INTEGER NOT NULL DEFAULT 0,
     created_at TEXT NOT NULL,
     date TEXT NOT NULL
   );
 `);
+
+// ─── Safe column migrations (ALTER TABLE для старых БД) ─────────────────────
+const safeAlter = (sql: string) => { try { sqlite.exec(sql); } catch {} };
+
+// sessions: если таблица была создана без id (старая версия) — пересоздаём
+try {
+  const cols = sqlite.prepare("PRAGMA table_info(sessions)").all() as any[];
+  const hasId = cols.some((c: any) => c.name === "id");
+  if (!hasId) {
+    sqlite.exec(`
+      DROP TABLE IF EXISTS sessions;
+      CREATE TABLE sessions (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        user_id INTEGER NOT NULL,
+        session_id TEXT NOT NULL UNIQUE,
+        created_at TEXT NOT NULL
+      );
+    `);
+  }
+} catch {}
 
 // Seed default data if empty
 function seedIfEmpty() {
   const existingUsers = db.select().from(users).all();
   if (existingUsers.length > 0) return;
 
-  // Admin user
   const adminHash = bcrypt.hashSync("admin123", 12);
   db.insert(users).values({ username: "admin", passwordHash: adminHash, role: "admin", displayName: "Администратор" }).run();
   const masterHash = bcrypt.hashSync("master123", 12);
   db.insert(users).values({ username: "master1", passwordHash: masterHash, role: "master", displayName: "Мастер Иван" }).run();
 
-  // Categories
   db.insert(categories).values({ name: "iPhone", icon: "Smartphone", sortOrder: 1 }).run();
   db.insert(categories).values({ name: "Android", icon: "Phone", sortOrder: 2 }).run();
   db.insert(categories).values({ name: "Игровые приставки", icon: "Gamepad2", sortOrder: 3 }).run();
 
   const cat1 = db.select().from(categories).all()[0];
-
-  // iPhone models
   const iphoneModels = [
     "iPhone 16 Pro Max", "iPhone 16 Pro", "iPhone 16 Plus", "iPhone 16",
     "iPhone 15 Pro Max", "iPhone 15 Pro", "iPhone 15 Plus", "iPhone 15",
@@ -212,12 +244,10 @@ function seedIfEmpty() {
     "iPhone 8 Plus", "iPhone 8", "iPhone 7 Plus", "iPhone 7",
     "iPhone SE (3-го поколения)", "iPhone SE (2-го поколения)",
   ];
-
   iphoneModels.forEach((name, i) => {
     db.insert(deviceModels).values({ categoryId: cat1.id, name, sortOrder: i }).run();
   });
 
-  // Services for each iPhone model
   const allModels = db.select().from(deviceModels).all();
   const commonServices = [
     { name: "Замена дисплея (оригинал)", price: 4500, priceMax: 8000, duration: "30-60 мин" },
@@ -239,10 +269,8 @@ function seedIfEmpty() {
     { name: "Разблокировка (программная)", price: 500, priceMax: 1500, duration: "30-60 мин" },
     { name: "Диагностика", price: 0, duration: "15 мин" },
   ];
-
   allModels.forEach((model, mi) => {
     commonServices.forEach((svc, si) => {
-      // Adjust price slightly per model generation (newer = slightly higher)
       const multiplier = Math.max(0.7, 1 - mi * 0.01);
       db.insert(services).values({
         deviceModelId: model.id,
@@ -255,7 +283,6 @@ function seedIfEmpty() {
     });
   });
 
-  // Sample suppliers
   const existingSuppliers = db.select().from(suppliers).all();
   if (existingSuppliers.length === 0) {
     db.insert(suppliers).values({ name: "iFix Parts", type: "supplier", contact: "Алексей Петров", phone: "+7 999 111 22 33", website: "ifixparts.ru", notes: "Оригинальные запчасти Apple", sortOrder: 1 }).run();
@@ -269,344 +296,163 @@ function seedIfEmpty() {
 
 seedIfEmpty();
 
-// ─── Storage Interface ────────────────────────────────────────────────────────
-export interface IStorage {
-  // Auth
-  getAllUsers(): User[];
-  getUserByUsername(username: string): User | undefined;
-  getUserById(id: number): User | undefined;
-  createUser(data: InsertUser): User;
-  updateUser(id: number, data: Partial<InsertUser>): User | undefined;
-  deleteUser(id: number): void;
+export class SQLiteStorage {
+  // ─── Users ──────────────────────────────────────────────────────────────────
+  getAllUsers() { return db.select().from(users).all(); }
+  getUserByUsername(u: string) { return db.select().from(users).where(eq(users.username, u)).get(); }
+  getUserById(id: number) { return db.select().from(users).where(eq(users.id, id)).get(); }
+  createUser(data: InsertUser) { return db.insert(users).values(data).returning().get(); }
+  updateUser(id: number, data: Partial<InsertUser>) { return db.update(users).set(data).where(eq(users.id, id)).returning().get(); }
+  deleteUser(id: number) { db.delete(users).where(eq(users.id, id)).run(); }
 
-  // Categories
-  getCategories(): Category[];
-  createCategory(data: InsertCategory): Category;
-  updateCategory(id: number, data: Partial<InsertCategory>): Category | undefined;
-  deleteCategory(id: number): void;
-
-  // Subcategories
-  getSubcategoriesByCategory(categoryId: number): Subcategory[];
-  createSubcategory(data: InsertSubcategory): Subcategory;
-  updateSubcategory(id: number, data: Partial<InsertSubcategory>): Subcategory | undefined;
-  deleteSubcategory(id: number): void;
-
-  // Device Models
-  getDeviceModelsByCategory(categoryId: number): DeviceModel[];
-  getDeviceModelsBySubcategory(subcategoryId: number): DeviceModel[];
-  getAllDeviceModels(): DeviceModel[];
-  createDeviceModel(data: InsertDeviceModel): DeviceModel;
-  updateDeviceModel(id: number, data: Partial<InsertDeviceModel>): DeviceModel | undefined;
-  deleteDeviceModel(id: number): void;
-
-  // Services
-  getServicesByModel(deviceModelId: number): Service[];
-  createService(data: InsertService): Service;
-  updateService(id: number, data: Partial<InsertService>): Service | undefined;
-  deleteService(id: number): void;
-
-  // Suppliers
-  getSuppliers(): Supplier[];
-  createSupplier(data: InsertSupplier): Supplier;
-  updateSupplier(id: number, data: Partial<InsertSupplier>): Supplier | undefined;
-  deleteSupplier(id: number): void;
-
-  // Change Requests
-  getChangeRequests(): ChangeRequest[];
-  getPendingChangeRequests(): ChangeRequest[];
-  createChangeRequest(data: InsertChangeRequest): ChangeRequest;
-  updateChangeRequestStatus(id: number, status: string, adminComment?: string): ChangeRequest | undefined;
-
-  // Sessions
-  upsertSession(userId: number, sessionId: string): void;
-  getSession(userId: number): Session | undefined;
-  deleteSession(userId: number): void;
-
-  // Clients
-  getClients(): Client[];
-  searchClients(query: string): Client[];
-  getClientById(id: number): Client | undefined;
-  getClientByPhone(phone: string): Client | undefined;
-  createClient(data: InsertClient): Client;
-  updateClient(id: number, data: Partial<InsertClient>): Client | undefined;
-  deleteClient(id: number): void;
-
-  // Repairs (полные карточки ремонта)
-  getRepairs(): Repair[];
-  getNewRepairsCount(): number;
-  getRepairById(id: number): Repair | undefined;
-  getRepairsByClient(clientId: number): Repair[];
-  createRepair(data: InsertRepair): Repair;
-  updateRepair(id: number, data: Partial<InsertRepair>): Repair | undefined;
-  repairExists(messageId: string): boolean;
-
-  // Orders (алиас для совместимости с emailPoller)
-  getOrders(): Repair[];
-  getNewOrdersCount(): number;
-  getOrderById(id: number): Repair | undefined;
-  createOrder(data: InsertRepair): Repair;
-  orderExists(messageId: string): boolean;
-  updateOrderStatus(id: number, status: string): Repair | undefined;
-  updateOrderCalled(id: number, called: boolean): Repair | undefined;
-
-  // Parts
-  getParts(): Part[];
-  getPartById(id: number): Part | undefined;
-  createPart(data: InsertPart): Part;
-  updatePart(id: number, data: Partial<InsertPart>): Part | undefined;
-  deletePart(id: number): void;
-  adjustPartQuantity(id: number, delta: number): Part | undefined;
-  getMovementsByPart(partId: number): PartMovement[];
-  createMovement(data: InsertPartMovement): PartMovement;
-
-  // Transactions
-  getTransactions(from?: string, to?: string): Transaction[];
-  getTransactionById(id: number): Transaction | undefined;
-  createTransaction(data: InsertTransaction): Transaction;
-  updateTransaction(id: number, data: Partial<InsertTransaction>): Transaction | undefined;
-  deleteTransaction(id: number): void;
-}
-
-export class SQLiteStorage implements IStorage {
-  getAllUsers() {
-    return db.select().from(users).all();
-  }
-  getUserByUsername(username: string) {
-    return db.select().from(users).where(eq(users.username, username)).get();
-  }
-  getUserById(id: number) {
-    return db.select().from(users).where(eq(users.id, id)).get();
-  }
-  createUser(data: InsertUser) {
-    return db.insert(users).values(data).returning().get();
-  }
-  updateUser(id: number, data: Partial<InsertUser>) {
-    return db.update(users).set(data).where(eq(users.id, id)).returning().get();
-  }
-  deleteUser(id: number) {
-    db.delete(users).where(eq(users.id, id)).run();
-  }
-
-  getCategories() {
-    return db.select().from(categories).all();
-  }
-  createCategory(data: InsertCategory) {
-    return db.insert(categories).values(data).returning().get();
-  }
-  updateCategory(id: number, data: Partial<InsertCategory>) {
-    return db.update(categories).set(data).where(eq(categories.id, id)).returning().get();
-  }
-  deleteCategory(id: number) {
-    db.delete(categories).where(eq(categories.id, id)).run();
-  }
-
-  getSubcategoriesByCategory(categoryId: number) {
-    return db.select().from(subcategories).where(eq(subcategories.categoryId, categoryId)).all();
-  }
-  createSubcategory(data: InsertSubcategory) {
-    return db.insert(subcategories).values(data).returning().get();
-  }
-  updateSubcategory(id: number, data: Partial<InsertSubcategory>) {
-    return db.update(subcategories).set(data).where(eq(subcategories.id, id)).returning().get();
-  }
-  deleteSubcategory(id: number) {
-    db.delete(subcategories).where(eq(subcategories.id, id)).run();
-  }
-
-  getDeviceModelsByCategory(categoryId: number) {
-    return db.select().from(deviceModels).where(eq(deviceModels.categoryId, categoryId)).all();
-  }
-  getDeviceModelsBySubcategory(subcategoryId: number) {
-    return db.select().from(deviceModels).where(eq(deviceModels.subcategoryId, subcategoryId)).all();
-  }
-  getAllDeviceModels() {
-    return db.select().from(deviceModels).all();
-  }
-  createDeviceModel(data: InsertDeviceModel) {
-    return db.insert(deviceModels).values(data).returning().get();
-  }
-  updateDeviceModel(id: number, data: Partial<InsertDeviceModel>) {
-    return db.update(deviceModels).set(data).where(eq(deviceModels.id, id)).returning().get();
-  }
-  deleteDeviceModel(id: number) {
-    db.delete(deviceModels).where(eq(deviceModels.id, id)).run();
-  }
-
-  getServicesByModel(deviceModelId: number) {
-    return db.select().from(services).where(eq(services.deviceModelId, deviceModelId)).all();
-  }
-  createService(data: InsertService) {
-    return db.insert(services).values(data).returning().get();
-  }
-  updateService(id: number, data: Partial<InsertService>) {
-    return db.update(services).set(data).where(eq(services.id, id)).returning().get();
-  }
-  deleteService(id: number) {
-    db.delete(services).where(eq(services.id, id)).run();
-  }
-
-  getSuppliers() {
-    return db.select().from(suppliers).all();
-  }
-  createSupplier(data: InsertSupplier) {
-    return db.insert(suppliers).values(data).returning().get();
-  }
-  updateSupplier(id: number, data: Partial<InsertSupplier>) {
-    return db.update(suppliers).set(data).where(eq(suppliers.id, id)).returning().get();
-  }
-  deleteSupplier(id: number) {
-    db.delete(suppliers).where(eq(suppliers.id, id)).run();
-  }
-
-  getChangeRequests() {
-    return db.select().from(changeRequests).all();
-  }
-  getPendingChangeRequests() {
-    return db.select().from(changeRequests).where(eq(changeRequests.status, "pending")).all();
-  }
-  createChangeRequest(data: InsertChangeRequest) {
-    return db.insert(changeRequests).values(data).returning().get();
-  }
-  updateChangeRequestStatus(id: number, status: string, adminComment?: string) {
-    const updateData: any = { status };
-    if (adminComment !== undefined) updateData.adminComment = adminComment;
-    return db.update(changeRequests).set(updateData).where(eq(changeRequests.id, id)).returning().get();
-  }
-
-  // ─── Sessions ────────────────────────────────────────────────────────────────────
-  upsertSession(userId: number, sessionId: string) {
-    sqlite.prepare(
-      `INSERT INTO sessions (user_id, session_id, created_at) VALUES (?, ?, ?)
-       ON CONFLICT(user_id) DO UPDATE SET session_id = excluded.session_id, created_at = excluded.created_at`
-    ).run(userId, sessionId, new Date().toISOString());
-  }
-  getSession(userId: number) {
-    return db.select().from(sessions).where(eq(sessions.userId, userId)).get();
-  }
-  deleteSession(userId: number) {
+  // ─── Sessions ────────────────────────────────────────────────────────────────
+  createSession(userId: number, sessionId: string) {
     db.delete(sessions).where(eq(sessions.userId, userId)).run();
+    return db.insert(sessions).values({ userId, sessionId, createdAt: new Date().toISOString() }).returning().get();
+  }
+  getSessionBySessionId(sessionId: string) { return db.select().from(sessions).where(eq(sessions.sessionId, sessionId)).get(); }
+  deleteSession(sessionId: string) { db.delete(sessions).where(eq(sessions.sessionId, sessionId)).run(); }
+  deleteSessionsByUserId(userId: number) { db.delete(sessions).where(eq(sessions.userId, userId)).run(); }
+
+  // ─── Categories ──────────────────────────────────────────────────────────────
+  getCategories() { return db.select().from(categories).all(); }
+  createCategory(data: InsertCategory) { return db.insert(categories).values(data).returning().get(); }
+  updateCategory(id: number, data: Partial<InsertCategory>) { return db.update(categories).set(data).where(eq(categories.id, id)).returning().get(); }
+  deleteCategory(id: number) { db.delete(categories).where(eq(categories.id, id)).run(); }
+
+  // ─── Subcategories ───────────────────────────────────────────────────────────
+  getSubcategoriesByCategory(categoryId: number) { return db.select().from(subcategories).where(eq(subcategories.categoryId, categoryId)).all(); }
+  createSubcategory(data: InsertSubcategory) { return db.insert(subcategories).values(data).returning().get(); }
+  updateSubcategory(id: number, data: Partial<InsertSubcategory>) { return db.update(subcategories).set(data).where(eq(subcategories.id, id)).returning().get(); }
+  deleteSubcategory(id: number) { db.delete(subcategories).where(eq(subcategories.id, id)).run(); }
+
+  // ─── Device Models ───────────────────────────────────────────────────────────
+  getDeviceModelsByCategory(categoryId: number) { return db.select().from(deviceModels).where(eq(deviceModels.categoryId, categoryId)).all(); }
+  getDeviceModelsBySubcategory(subcategoryId: number) { return db.select().from(deviceModels).where(eq(deviceModels.subcategoryId, subcategoryId)).all(); }
+  getAllDeviceModels() { return db.select().from(deviceModels).all(); }
+  createDeviceModel(data: InsertDeviceModel) { return db.insert(deviceModels).values(data).returning().get(); }
+  updateDeviceModel(id: number, data: Partial<InsertDeviceModel>) { return db.update(deviceModels).set(data).where(eq(deviceModels.id, id)).returning().get(); }
+  deleteDeviceModel(id: number) { db.delete(deviceModels).where(eq(deviceModels.id, id)).run(); }
+
+  // ─── Services ────────────────────────────────────────────────────────────────
+  getServicesByModel(deviceModelId: number) { return db.select().from(services).where(eq(services.deviceModelId, deviceModelId)).all(); }
+  createService(data: InsertService) { return db.insert(services).values(data).returning().get(); }
+  updateService(id: number, data: Partial<InsertService>) { return db.update(services).set(data).where(eq(services.id, id)).returning().get(); }
+  deleteService(id: number) { db.delete(services).where(eq(services.id, id)).run(); }
+
+  // ─── Suppliers ───────────────────────────────────────────────────────────────
+  getSuppliers() { return db.select().from(suppliers).all(); }
+  createSupplier(data: InsertSupplier) { return db.insert(suppliers).values(data).returning().get(); }
+  updateSupplier(id: number, data: Partial<InsertSupplier>) { return db.update(suppliers).set(data).where(eq(suppliers.id, id)).returning().get(); }
+  deleteSupplier(id: number) { db.delete(suppliers).where(eq(suppliers.id, id)).run(); }
+
+  // ─── Change Requests ─────────────────────────────────────────────────────────
+  getChangeRequests() { return db.select().from(changeRequests).all(); }
+  getPendingChangeRequests() { return db.select().from(changeRequests).where(eq(changeRequests.status, "pending")).all(); }
+  createChangeRequest(data: InsertChangeRequest) { return db.insert(changeRequests).values(data).returning().get(); }
+  updateChangeRequestStatus(id: number, status: string, adminComment?: string) {
+    const d: any = { status };
+    if (adminComment !== undefined) d.adminComment = adminComment;
+    return db.update(changeRequests).set(d).where(eq(changeRequests.id, id)).returning().get();
   }
 
-  // ─── Clients ──────────────────────────────────────────────────────────────────
-  getClients() {
-    return db.select().from(clients).orderBy(desc(clients.createdAt)).all();
-  }
-  searchClients(query: string) {
-    const q = query.toLowerCase();
-    return db.select().from(clients).all().filter(c =>
-      c.name.toLowerCase().includes(q) || c.phone.includes(q) || (c.email || "").toLowerCase().includes(q)
-    );
-  }
-  getClientById(id: number) {
-    return db.select().from(clients).where(eq(clients.id, id)).get();
-  }
-  getClientByPhone(phone: string) {
-    // нормализуем: убираем всё кроме цифр
-    const digits = phone.replace(/\D/g, "");
-    return db.select().from(clients).all().find(c => c.phone.replace(/\D/g, "") === digits);
-  }
-  createClient(data: InsertClient) {
-    return db.insert(clients).values(data).returning().get();
-  }
-  updateClient(id: number, data: Partial<InsertClient>) {
-    return db.update(clients).set(data).where(eq(clients.id, id)).returning().get();
-  }
-  deleteClient(id: number) {
-    db.delete(clients).where(eq(clients.id, id)).run();
+  // ─── Orders (email) ──────────────────────────────────────────────────────────
+  getOrders() { return db.select().from(orders).orderBy(desc(orders.createdAt)).all(); }
+  getNewOrdersCount() { return db.select().from(orders).where(eq(orders.status, "новая")).all().length; }
+  getOrderById(id: number) { return db.select().from(orders).where(eq(orders.id, id)).get(); }
+  createOrder(data: InsertOrder) { return db.insert(orders).values(data).returning().get(); }
+  orderExists(messageId: string) { return !!db.select().from(orders).where(eq(orders.messageId, messageId)).get(); }
+  updateOrderStatus(id: number, status: string) { return db.update(orders).set({ status }).where(eq(orders.id, id)).returning().get(); }
+  updateOrderCalled(id: number, called: boolean) { return db.update(orders).set({ called }).where(eq(orders.id, id)).returning().get(); }
+
+  // ─── Clients ─────────────────────────────────────────────────────────────────
+  getClients() { return db.select().from(clients).orderBy(desc(clients.createdAt)).all(); }
+  getClientById(id: number) { return db.select().from(clients).where(eq(clients.id, id)).get(); }
+  createClient(data: InsertClient) { return db.insert(clients).values(data).returning().get(); }
+  updateClient(id: number, data: Partial<InsertClient>) { return db.update(clients).set(data).where(eq(clients.id, id)).returning().get(); }
+  deleteClient(id: number) { db.delete(clients).where(eq(clients.id, id)).run(); }
+
+  // ─── Repairs (manual CRM) ────────────────────────────────────────────────────
+  getRepairs() { return db.select().from(repairs).orderBy(desc(repairs.createdAt)).all(); }
+  getRepairById(id: number) { return db.select().from(repairs).where(eq(repairs.id, id)).get(); }
+  getRepairsByClient(clientId: number) { return db.select().from(repairs).where(eq(repairs.clientId, clientId)).orderBy(desc(repairs.createdAt)).all(); }
+  getNewRepairsCount() { return db.select().from(repairs).where(eq(repairs.status, "новая")).all().length; }
+  createRepair(data: InsertRepair) { return db.insert(repairs).values(data).returning().get(); }
+  updateRepair(id: number, data: Partial<InsertRepair>) { return db.update(repairs).set(data).where(eq(repairs.id, id)).returning().get(); }
+  deleteRepair(id: number) { db.delete(repairs).where(eq(repairs.id, id)).run(); }
+
+  // ─── Parts (склад) ───────────────────────────────────────────────────────────
+  getParts() { return db.select().from(parts).orderBy(desc(parts.createdAt)).all(); }
+  getPartById(id: number) { return db.select().from(parts).where(eq(parts.id, id)).get(); }
+  createPart(data: InsertPart) { return db.insert(parts).values(data).returning().get(); }
+  updatePart(id: number, data: Partial<InsertPart>) { return db.update(parts).set(data).where(eq(parts.id, id)).returning().get(); }
+  deletePart(id: number) { db.delete(parts).where(eq(parts.id, id)).run(); }
+
+  partIn(partId: number, quantity: number, price: number | null, comment: string | null) {
+    const now = new Date().toISOString();
+    const part = db.select().from(parts).where(eq(parts.id, partId)).get();
+    if (!part) throw new Error("Part not found");
+    db.update(parts).set({ quantity: part.quantity + quantity, updatedAt: now }).where(eq(parts.id, partId)).run();
+    return db.insert(partMovements).values({ partId, type: "in", quantity, price, repairId: null, comment, createdAt: now }).returning().get();
   }
 
-  // ─── Repairs ──────────────────────────────────────────────────────────────────
-  getRepairs() {
-    return db.select().from(repairs).orderBy(desc(repairs.createdAt)).all();
-  }
-  getNewRepairsCount() {
-    return db.select().from(repairs).where(eq(repairs.status, "новая")).all().length;
-  }
-  getRepairById(id: number) {
-    return db.select().from(repairs).where(eq(repairs.id, id)).get();
-  }
-  getRepairsByClient(clientId: number) {
-    return db.select().from(repairs).where(eq(repairs.clientId, clientId)).orderBy(desc(repairs.createdAt)).all();
-  }
-  createRepair(data: InsertRepair) {
-    return db.insert(repairs).values(data).returning().get();
-  }
-  updateRepair(id: number, data: Partial<InsertRepair>) {
-    return db.update(repairs).set({ ...data, updatedAt: new Date().toISOString() }).where(eq(repairs.id, id)).returning().get();
-  }
-  repairExists(messageId: string) {
-    const row = db.select().from(repairs).where(eq(repairs.messageId, messageId)).get();
-    return !!row;
+  partOut(partId: number, quantity: number, repairId: number | null, comment: string | null) {
+    const now = new Date().toISOString();
+    const part = db.select().from(parts).where(eq(parts.id, partId)).get();
+    if (!part) throw new Error("Part not found");
+    if (part.quantity < quantity) throw new Error("Not enough quantity");
+    db.update(parts).set({ quantity: part.quantity - quantity, updatedAt: now }).where(eq(parts.id, partId)).run();
+    return db.insert(partMovements).values({ partId, type: "out", quantity, price: null, repairId, comment, createdAt: now }).returning().get();
   }
 
-  // Orders — алиасы для обратной совместимости с emailPoller
-  getOrders() { return this.getRepairs(); }
-  getNewOrdersCount() { return this.getNewRepairsCount(); }
-  getOrderById(id: number) { return this.getRepairById(id); }
-  createOrder(data: InsertRepair) { return this.createRepair(data); }
-  orderExists(messageId: string) { return this.repairExists(messageId); }
-  updateOrderStatus(id: number, status: string) {
-    return this.updateRepair(id, { status });
-  }
-  updateOrderCalled(id: number, called: boolean) {
-    return this.updateRepair(id, { called });
-  }
+  getPartMovements(partId: number) { return db.select().from(partMovements).where(eq(partMovements.partId, partId)).orderBy(desc(partMovements.createdAt)).all(); }
 
-  // ─── Parts ────────────────────────────────────────────────────────────────────────
-  getParts() {
-    return db.select().from(parts).orderBy(desc(parts.createdAt)).all();
+  // ─── Transactions (касса) ────────────────────────────────────────────────────
+  getTransactions(filters?: { type?: string; dateFrom?: string; dateTo?: string }) {
+    let q = db.select().from(transactions);
+    const rows = q.orderBy(desc(transactions.date)).all();
+    if (!filters) return rows;
+    return rows.filter(r => {
+      if (filters.type && r.type !== filters.type) return false;
+      if (filters.dateFrom && r.date < filters.dateFrom) return false;
+      if (filters.dateTo && r.date > filters.dateTo) return false;
+      return true;
+    });
   }
-  getPartById(id: number) {
-    return db.select().from(parts).where(eq(parts.id, id)).get();
-  }
-  createPart(data: InsertPart) {
-    return db.insert(parts).values(data).returning().get();
-  }
-  updatePart(id: number, data: Partial<InsertPart>) {
-    return db.update(parts)
-      .set({ ...data, updatedAt: new Date().toISOString() })
-      .where(eq(parts.id, id))
-      .returning().get();
-  }
-  deletePart(id: number) {
-    db.delete(parts).where(eq(parts.id, id)).run();
-  }
-  adjustPartQuantity(id: number, delta: number) {
-    const part = this.getPartById(id);
-    if (!part) return undefined;
-    const newQty = Math.max(0, part.quantity + delta);
-    return this.updatePart(id, { quantity: newQty });
-  }
+  getTransactionById(id: number) { return db.select().from(transactions).where(eq(transactions.id, id)).get(); }
+  createTransaction(data: InsertTransaction) { return db.insert(transactions).values(data).returning().get(); }
+  deleteTransaction(id: number) { db.delete(transactions).where(eq(transactions.id, id)).run(); }
 
-  // ─── Part Movements ────────────────────────────────────────────────────────────────
-  getMovementsByPart(partId: number) {
-    return db.select().from(partMovements)
-      .where(eq(partMovements.partId, partId))
-      .orderBy(desc(partMovements.createdAt))
+  // ─── Salaries (зарплата мастеров) ────────────────────────────────────────────
+  getSalaries(filters?: { masterId?: number; period?: string; paid?: boolean }) {
+    const rows = db.select().from(salaries).orderBy(desc(salaries.date)).all();
+    if (!filters) return rows;
+    return rows.filter(r => {
+      if (filters.masterId !== undefined && r.masterId !== filters.masterId) return false;
+      if (filters.period && r.period !== filters.period) return false;
+      if (filters.paid !== undefined && r.paid !== filters.paid) return false;
+      return true;
+    });
+  }
+  getSalaryById(id: number) { return db.select().from(salaries).where(eq(salaries.id, id)).get(); }
+  createSalary(data: InsertSalary) { return db.insert(salaries).values(data).returning().get(); }
+  updateSalaryPaid(id: number, paid: boolean) { return db.update(salaries).set({ paid }).where(eq(salaries.id, id)).returning().get(); }
+  deleteSalary(id: number) { db.delete(salaries).where(eq(salaries.id, id)).run(); }
+
+  // Итоги по зарплате мастера за период
+  getSalaryTotals(masterId: number, period: string) {
+    const rows = db.select().from(salaries)
+      .where(and(eq(salaries.masterId, masterId), eq(salaries.period, period)))
       .all();
-  }
-  createMovement(data: InsertPartMovement) {
-    return db.insert(partMovements).values(data).returning().get();
-  }
-
-  // ─── Transactions ────────────────────────────────────────────────────────────────
-  getTransactions(from?: string, to?: string) {
-    let all = db.select().from(transactions).orderBy(desc(transactions.date)).all();
-    if (from) all = all.filter(t => t.date >= from);
-    if (to)   all = all.filter(t => t.date <= to);
-    return all;
-  }
-  getTransactionById(id: number) {
-    return db.select().from(transactions).where(eq(transactions.id, id)).get();
-  }
-  createTransaction(data: InsertTransaction) {
-    return db.insert(transactions).values(data).returning().get();
-  }
-  updateTransaction(id: number, data: Partial<InsertTransaction>) {
-    return db.update(transactions).set(data).where(eq(transactions.id, id)).returning().get();
-  }
-  deleteTransaction(id: number) {
-    db.delete(transactions).where(eq(transactions.id, id)).run();
+    const total = rows.reduce((sum, r) => {
+      if (r.type === "penalty") return sum - r.amount;
+      return sum + r.amount;
+    }, 0);
+    const paid = rows.filter(r => r.paid).reduce((sum, r) => {
+      if (r.type === "penalty") return sum - r.amount;
+      return sum + r.amount;
+    }, 0);
+    return { total, paid, debt: total - paid, rows };
   }
 }
 

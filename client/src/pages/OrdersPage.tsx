@@ -1,806 +1,347 @@
-import { useState, useRef, useEffect } from "react";
-import { useQuery, useMutation } from "@tanstack/react-query";
-import { queryClient, apiRequest } from "@/lib/queryClient";
-import { Badge } from "@/components/ui/badge";
-import { Button } from "@/components/ui/button";
-import { Card, CardContent, CardHeader } from "@/components/ui/card";
-import { Checkbox } from "@/components/ui/checkbox";
-import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
-import { Input } from "@/components/ui/input";
-import { Label } from "@/components/ui/label";
-import { Textarea } from "@/components/ui/textarea";
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { useState } from "react";
+import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
+import { useAuth } from "@/lib/auth";
 import { useToast } from "@/hooks/use-toast";
-import {
-  Phone, User, MapPin, Wrench, Tag, Calendar, Globe, Plus, Pencil,
-  Shield, Clock, CreditCard, DollarSign, Mail, ClipboardList, Search, UserPlus, X,
-} from "lucide-react";
-import type { Repair, Client } from "@shared/schema";
+import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
+import { Badge } from "@/components/ui/badge";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { Phone, PhoneOff, Plus, Search, X } from "lucide-react";
 
-// ─── Константы ────────────────────────────────────────────────────────────────
-const STATUS_LABELS: Record<string, string> = {
-  новая: "Новая", в_работе: "В работе", готово: "Готово", отказ: "Отказ", записал: "Записал",
+const STATUSES = ["новая", "в_работе", "готово", "отказ", "записал"] as const;
+type Status = typeof STATUSES[number];
+
+const statusColors: Record<string, string> = {
+  "новая": "bg-blue-100 text-blue-800 dark:bg-blue-900 dark:text-blue-200",
+  "в_работе": "bg-yellow-100 text-yellow-800 dark:bg-yellow-900 dark:text-yellow-200",
+  "готово": "bg-green-100 text-green-800 dark:bg-green-900 dark:text-green-200",
+  "отказ": "bg-red-100 text-red-800 dark:bg-red-900 dark:text-red-200",
+  "записал": "bg-purple-100 text-purple-800 dark:bg-purple-900 dark:text-purple-200",
 };
-const STATUS_COLORS: Record<string, string> = {
-  новая: "bg-blue-500 text-white",
-  в_работе: "bg-yellow-500 text-white",
-  готово: "bg-green-600 text-white",
-  отказ: "bg-red-500 text-white",
-  записал: "bg-purple-500 text-white",
+
+const statusLabels: Record<string, string> = {
+  "новая": "Новая", "в_работе": "В работе", "готово": "Готово", "отказ": "Отказ", "записал": "Записал",
 };
 
-function formatDate(iso: string) {
-  try {
-    return new Date(iso).toLocaleString("ru-RU", {
-      day: "2-digit", month: "2-digit", year: "numeric",
-      hour: "2-digit", minute: "2-digit",
-    });
-  } catch { return iso; }
+function apiRequest(url: string, method: string, token: string, body?: any) {
+  return fetch(url, {
+    method,
+    headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
+    body: body ? JSON.stringify(body) : undefined,
+  }).then(r => r.json());
 }
 
-// ─── Поиск клиента с выпадающим списком ───────────────────────────────────────
-function ClientSearch({
-  value,
-  onChange,
-}: {
-  value: { clientId?: number | null; clientName: string; phone: string };
-  onChange: (v: { clientId?: number | null; clientName: string; phone: string }) => void;
-}) {
-  const [query, setQuery] = useState(value.clientName || "");
-  const [open, setOpen] = useState(false);
-  const ref = useRef<HTMLDivElement>(null);
-
-  const { data: clients = [] } = useQuery<Client[]>({ queryKey: ["/api/clients"] });
-
-  const filtered = query.trim().length >= 2
-    ? clients.filter(c =>
-        c.name.toLowerCase().includes(query.toLowerCase()) ||
-        (c.phone && c.phone.includes(query))
-      )
-    : [];
-
-  // Закрываем при клике снаружи
-  useEffect(() => {
-    function handler(e: MouseEvent) {
-      if (ref.current && !ref.current.contains(e.target as Node)) setOpen(false);
-    }
-    document.addEventListener("mousedown", handler);
-    return () => document.removeEventListener("mousedown", handler);
-  }, []);
-
-  function select(client: Client) {
-    onChange({ clientId: client.id, clientName: client.name, phone: client.phone || "" });
-    setQuery(client.name);
-    setOpen(false);
-  }
-
-  function clear() {
-    onChange({ clientId: null, clientName: "", phone: "" });
-    setQuery("");
-  }
-
-  return (
-    <div ref={ref} className="relative">
-      <div className="relative">
-        <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground pointer-events-none" />
-        <Input
-          value={query}
-          onChange={e => {
-            setQuery(e.target.value);
-            if (!e.target.value) onChange({ clientId: null, clientName: "", phone: "" });
-            setOpen(true);
-          }}
-          onFocus={() => query.trim().length >= 2 && setOpen(true)}
-          placeholder="Поиск по имени или телефону..."
-          className="pl-9 pr-8"
-        />
-        {query && (
-          <button onClick={clear} className="absolute right-2 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground">
-            <X className="w-4 h-4" />
-          </button>
-        )}
-      </div>
-      {open && filtered.length > 0 && (
-        <div className="absolute z-50 w-full mt-1 bg-popover border border-border rounded-lg shadow-lg overflow-hidden">
-          {filtered.slice(0, 5).map(c => (
-            <button
-              key={c.id}
-              type="button"
-              onClick={() => select(c)}
-              className="w-full flex items-start gap-2 px-3 py-2.5 text-sm hover:bg-muted transition-colors text-left"
-            >
-              <User className="w-4 h-4 mt-0.5 text-muted-foreground shrink-0" />
-              <div>
-                <div className="font-medium">{c.name}</div>
-                {c.phone && <div className="text-xs text-muted-foreground">{c.phone}</div>}
-              </div>
-            </button>
-          ))}
-        </div>
-      )}
-      {open && query.trim().length >= 2 && filtered.length === 0 && (
-        <div className="absolute z-50 w-full mt-1 bg-popover border border-border rounded-lg shadow-lg px-3 py-2.5 text-sm text-muted-foreground">
-          Клиент не найден — можно создать нового ниже
-        </div>
-      )}
-    </div>
-  );
-}
-
-// ─── Форма создания ручной заявки ─────────────────────────────────────────────
-function ManualRepairForm({ onClose }: { onClose: () => void }) {
+// ─── Email Orders ─────────────────────────────────────────────────────────────
+function EmailOrdersList() {
+  const { token } = useAuth();
+  const qc = useQueryClient();
   const { toast } = useToast();
+  const [search, setSearch] = useState("");
 
-  // Клиент
-  const [clientData, setClientData] = useState<{
-    clientId?: number | null;
-    clientName: string;
-    phone: string;
-  }>({ clientId: null, clientName: "", phone: "" });
-  const [newClient, setNewClient] = useState(false); // режим создания нового клиента
-
-  // Поля заявки
-  const [form, setForm] = useState({
-    deviceType: "",
-    brand: "",
-    model: "",
-    imei: "",
-    appearance: "",
-    issue: "",
-    estimatedPrice: "",
-    finalPrice: "",
-    prepayment: "",
-    deadline: "",
-    warranty: "",
-    masterComment: "",
-    status: "новая",
-    discount: "",
-  });
-  const set = (k: string, v: string) => setForm(p => ({ ...p, [k]: v }));
-
-  // Создание клиента на лету
-  const createClientMutation = useMutation({
-    mutationFn: async (data: { name: string; phone: string }) =>
-      apiRequest("POST", "/api/clients", data).then(r => r.json()),
-  });
-
-  const createRepairMutation = useMutation({
-    mutationFn: async (clientId: number | null) => {
-      const data = {
-        ...form,
-        clientId,
-        clientName: clientData.clientName,
-        phone: clientData.phone,
-        estimatedPrice: form.estimatedPrice ? parseFloat(form.estimatedPrice) : null,
-        finalPrice: form.finalPrice ? parseFloat(form.finalPrice) : null,
-        prepayment: form.prepayment ? parseFloat(form.prepayment) : null,
-        source: "manual",
-      };
-      return apiRequest("POST", "/api/repairs", data).then(r => r.json());
-    },
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["/api/repairs"] });
-      queryClient.invalidateQueries({ queryKey: ["/api/clients"] });
-      toast({ title: "Заявка создана" });
-      onClose();
-    },
-    onError: (e: any) => toast({ title: "Ошибка", description: e.message, variant: "destructive" }),
-  });
-
-  async function submit() {
-    if (!clientData.clientName.trim()) {
-      toast({ title: "Укажите клиента", variant: "destructive" });
-      return;
-    }
-
-    let clientId = clientData.clientId ?? null;
-
-    // Если нет clientId — создаём нового клиента
-    if (!clientId && clientData.clientName.trim()) {
-      try {
-        const created = await createClientMutation.mutateAsync({
-          name: clientData.clientName.trim(),
-          phone: clientData.phone.trim(),
-        });
-        clientId = created.id;
-      } catch {
-        // Если не получилось создать клиента — создаём заявку без привязки
-        clientId = null;
-      }
-    }
-
-    createRepairMutation.mutate(clientId);
-  }
-
-  const isLoading = createClientMutation.isPending || createRepairMutation.isPending;
-
-  return (
-    <div className="space-y-5 py-1">
-      {/* Клиент */}
-      <div>
-        <h3 className="text-sm font-semibold text-muted-foreground uppercase tracking-wide mb-3">Клиент</h3>
-        <ClientSearch value={clientData} onChange={setClientData} />
-
-        {/* Выбранный клиент */}
-        {clientData.clientId && (
-          <div className="mt-2 flex items-center gap-2 px-3 py-2 bg-green-50 dark:bg-green-900/20 rounded-lg border border-green-200 dark:border-green-800">
-            <User className="w-4 h-4 text-green-600 shrink-0" />
-            <div className="flex-1 min-w-0">
-              <span className="text-sm font-medium text-green-700 dark:text-green-400">{clientData.clientName}</span>
-              {clientData.phone && <span className="text-xs text-green-600 dark:text-green-500 ml-2">{clientData.phone}</span>}
-            </div>
-            <Badge variant="outline" className="text-xs border-green-300 text-green-700 dark:text-green-400 shrink-0">из базы</Badge>
-          </div>
-        )}
-
-        {/* Если клиент не найден — поля для нового */}
-        {!clientData.clientId && clientData.clientName && (
-          <div className="mt-3 space-y-3 p-3 border border-dashed border-border rounded-lg">
-            <div className="flex items-center gap-2 text-sm text-muted-foreground">
-              <UserPlus className="w-4 h-4" />
-              <span>Новый клиент будет создан в базе</span>
-            </div>
-            <div className="grid grid-cols-2 gap-3">
-              <div className="space-y-1.5">
-                <Label>Имя *</Label>
-                <Input
-                  value={clientData.clientName}
-                  onChange={e => setClientData(p => ({ ...p, clientName: e.target.value }))}
-                  placeholder="Иван Петров"
-                />
-              </div>
-              <div className="space-y-1.5">
-                <Label>Телефон</Label>
-                <Input
-                  value={clientData.phone}
-                  onChange={e => setClientData(p => ({ ...p, phone: e.target.value }))}
-                  placeholder="+7 999 000 00 00"
-                />
-              </div>
-            </div>
-          </div>
-        )}
-
-        {/* Кнопка создать нового если поиск пустой */}
-        {!clientData.clientId && !clientData.clientName && (
-          <button
-            type="button"
-            onClick={() => setClientData(p => ({ ...p, clientName: " " }))}
-            className="mt-2 flex items-center gap-1.5 text-sm text-muted-foreground hover:text-foreground transition-colors"
-          >
-            <UserPlus className="w-4 h-4" />
-            Создать нового клиента
-          </button>
-        )}
-      </div>
-
-      {/* Устройство */}
-      <div>
-        <h3 className="text-sm font-semibold text-muted-foreground uppercase tracking-wide mb-3">Устройство</h3>
-        <div className="grid grid-cols-2 gap-3">
-          <div className="space-y-1.5">
-            <Label>Тип устройства</Label>
-            <Select value={form.deviceType} onValueChange={v => set("deviceType", v)}>
-              <SelectTrigger><SelectValue placeholder="Выберите..." /></SelectTrigger>
-              <SelectContent>
-                {["Телефон", "Планшет", "Ноутбук", "Компьютер", "Приставка", "Часы", "Другое"].map(t => (
-                  <SelectItem key={t} value={t}>{t}</SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
-          </div>
-          <div className="space-y-1.5">
-            <Label>Марка</Label>
-            <Input value={form.brand} onChange={e => set("brand", e.target.value)} placeholder="Apple, Samsung..." />
-          </div>
-          <div className="space-y-1.5">
-            <Label>Модель</Label>
-            <Input value={form.model} onChange={e => set("model", e.target.value)} placeholder="iPhone 13, Galaxy S22..." />
-          </div>
-          <div className="space-y-1.5">
-            <Label>IMEI / Серийный номер</Label>
-            <Input value={form.imei} onChange={e => set("imei", e.target.value)} placeholder="354321000000000" />
-          </div>
-        </div>
-        <div className="space-y-1.5 mt-3">
-          <Label>Внешний вид при приёмке</Label>
-          <Textarea value={form.appearance} onChange={e => set("appearance", e.target.value)} rows={2}
-            placeholder="Трещина на экране, царапины на корпусе..." />
-        </div>
-        <div className="space-y-1.5 mt-3">
-          <Label>Неисправность</Label>
-          <Textarea value={form.issue} onChange={e => set("issue", e.target.value)} rows={2}
-            placeholder="Не включается, разбит экран..." />
-        </div>
-      </div>
-
-      {/* Финансы */}
-      <div>
-        <h3 className="text-sm font-semibold text-muted-foreground uppercase tracking-wide mb-3">Стоимость</h3>
-        <div className="grid grid-cols-3 gap-3">
-          <div className="space-y-1.5">
-            <Label>Оценка ₽</Label>
-            <Input type="number" value={form.estimatedPrice} onChange={e => set("estimatedPrice", e.target.value)} placeholder="0" />
-          </div>
-          <div className="space-y-1.5">
-            <Label>Итоговая ₽</Label>
-            <Input type="number" value={form.finalPrice} onChange={e => set("finalPrice", e.target.value)} placeholder="0" />
-          </div>
-          <div className="space-y-1.5">
-            <Label>Предоплата ₽</Label>
-            <Input type="number" value={form.prepayment} onChange={e => set("prepayment", e.target.value)} placeholder="0" />
-          </div>
-        </div>
-      </div>
-
-      {/* Сроки и гарантия */}
-      <div>
-        <h3 className="text-sm font-semibold text-muted-foreground uppercase tracking-wide mb-3">Сроки</h3>
-        <div className="grid grid-cols-2 gap-3">
-          <div className="space-y-1.5">
-            <Label>Срок выдачи</Label>
-            <Input type="date" value={form.deadline} onChange={e => set("deadline", e.target.value)} />
-          </div>
-          <div className="space-y-1.5">
-            <Label>Гарантия</Label>
-            <Input value={form.warranty} onChange={e => set("warranty", e.target.value)} placeholder="30 дней" />
-          </div>
-        </div>
-      </div>
-
-      {/* Статус и скидка */}
-      <div className="grid grid-cols-2 gap-3">
-        <div className="space-y-1.5">
-          <Label>Статус</Label>
-          <Select value={form.status} onValueChange={v => set("status", v)}>
-            <SelectTrigger><SelectValue /></SelectTrigger>
-            <SelectContent>
-              {Object.entries(STATUS_LABELS).map(([v, l]) => (
-                <SelectItem key={v} value={v}>{l}</SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
-        </div>
-        <div className="space-y-1.5">
-          <Label>Скидка</Label>
-          <Input value={form.discount} onChange={e => set("discount", e.target.value)} placeholder="10%" />
-        </div>
-      </div>
-
-      <div className="space-y-1.5">
-        <Label>Комментарий мастера</Label>
-        <Textarea value={form.masterComment} onChange={e => set("masterComment", e.target.value)} rows={2}
-          placeholder="Внутренние заметки..." />
-      </div>
-
-      <div className="flex gap-2 justify-end pt-2 border-t border-border">
-        <Button variant="outline" onClick={onClose}>Отмена</Button>
-        <Button onClick={submit} disabled={isLoading || !clientData.clientName.trim()}>
-          {isLoading ? "Сохраняю..." : "Создать заявку"}
-        </Button>
-      </div>
-    </div>
-  );
-}
-
-// ─── Форма редактирования существующей заявки ─────────────────────────────────
-function EditRepairForm({ repair, onClose }: { repair: Repair; onClose: () => void }) {
-  const { toast } = useToast();
-  const [form, setForm] = useState({
-    clientName: repair.clientName || "",
-    phone: repair.phone || "",
-    deviceType: repair.deviceType || "",
-    brand: repair.brand || "",
-    model: repair.model || "",
-    imei: repair.imei || "",
-    appearance: repair.appearance || "",
-    issue: repair.issue || "",
-    estimatedPrice: repair.estimatedPrice?.toString() || "",
-    finalPrice: repair.finalPrice?.toString() || "",
-    prepayment: repair.prepayment?.toString() || "",
-    deadline: repair.deadline || "",
-    warranty: repair.warranty || "",
-    masterComment: repair.masterComment || "",
-    status: repair.status || "новая",
-    discount: repair.discount || "",
-  });
-  const set = (k: string, v: string) => setForm(p => ({ ...p, [k]: v }));
-
-  const mutation = useMutation({
-    mutationFn: async () => {
-      const data = {
-        ...form,
-        estimatedPrice: form.estimatedPrice ? parseFloat(form.estimatedPrice) : null,
-        finalPrice: form.finalPrice ? parseFloat(form.finalPrice) : null,
-        prepayment: form.prepayment ? parseFloat(form.prepayment) : null,
-      };
-      return apiRequest("PUT", `/api/repairs/${repair.id}`, data).then(r => r.json());
-    },
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["/api/repairs"] });
-      queryClient.invalidateQueries({ queryKey: ["/api/orders"] });
-      toast({ title: "Заявка обновлена" });
-      onClose();
-    },
-    onError: (e: any) => toast({ title: "Ошибка", description: e.message, variant: "destructive" }),
-  });
-
-  return (
-    <div className="space-y-5 py-1">
-      <div>
-        <h3 className="text-sm font-semibold text-muted-foreground uppercase tracking-wide mb-3">Клиент</h3>
-        <div className="grid grid-cols-2 gap-3">
-          <div className="space-y-1.5">
-            <Label>Имя клиента</Label>
-            <Input value={form.clientName} onChange={e => set("clientName", e.target.value)} />
-          </div>
-          <div className="space-y-1.5">
-            <Label>Телефон</Label>
-            <Input value={form.phone} onChange={e => set("phone", e.target.value)} />
-          </div>
-        </div>
-      </div>
-
-      <div>
-        <h3 className="text-sm font-semibold text-muted-foreground uppercase tracking-wide mb-3">Устройство</h3>
-        <div className="grid grid-cols-2 gap-3">
-          <div className="space-y-1.5">
-            <Label>Тип</Label>
-            <Select value={form.deviceType} onValueChange={v => set("deviceType", v)}>
-              <SelectTrigger><SelectValue placeholder="Выберите..." /></SelectTrigger>
-              <SelectContent>
-                {["Телефон", "Планшет", "Ноутбук", "Компьютер", "Приставка", "Часы", "Другое"].map(t => (
-                  <SelectItem key={t} value={t}>{t}</SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
-          </div>
-          <div className="space-y-1.5">
-            <Label>Марка</Label>
-            <Input value={form.brand} onChange={e => set("brand", e.target.value)} />
-          </div>
-          <div className="space-y-1.5">
-            <Label>Модель</Label>
-            <Input value={form.model} onChange={e => set("model", e.target.value)} />
-          </div>
-          <div className="space-y-1.5">
-            <Label>IMEI</Label>
-            <Input value={form.imei} onChange={e => set("imei", e.target.value)} />
-          </div>
-        </div>
-        <div className="space-y-1.5 mt-3">
-          <Label>Внешний вид</Label>
-          <Textarea value={form.appearance} onChange={e => set("appearance", e.target.value)} rows={2} />
-        </div>
-        <div className="space-y-1.5 mt-3">
-          <Label>Неисправность</Label>
-          <Textarea value={form.issue} onChange={e => set("issue", e.target.value)} rows={2} />
-        </div>
-      </div>
-
-      <div>
-        <h3 className="text-sm font-semibold text-muted-foreground uppercase tracking-wide mb-3">Стоимость</h3>
-        <div className="grid grid-cols-3 gap-3">
-          <div className="space-y-1.5"><Label>Оценка ₽</Label><Input type="number" value={form.estimatedPrice} onChange={e => set("estimatedPrice", e.target.value)} /></div>
-          <div className="space-y-1.5"><Label>Итоговая ₽</Label><Input type="number" value={form.finalPrice} onChange={e => set("finalPrice", e.target.value)} /></div>
-          <div className="space-y-1.5"><Label>Предоплата ₽</Label><Input type="number" value={form.prepayment} onChange={e => set("prepayment", e.target.value)} /></div>
-        </div>
-      </div>
-
-      <div className="grid grid-cols-2 gap-3">
-        <div className="space-y-1.5"><Label>Срок выдачи</Label><Input type="date" value={form.deadline} onChange={e => set("deadline", e.target.value)} /></div>
-        <div className="space-y-1.5"><Label>Гарантия</Label><Input value={form.warranty} onChange={e => set("warranty", e.target.value)} /></div>
-      </div>
-
-      <div className="grid grid-cols-2 gap-3">
-        <div className="space-y-1.5">
-          <Label>Статус</Label>
-          <Select value={form.status} onValueChange={v => set("status", v)}>
-            <SelectTrigger><SelectValue /></SelectTrigger>
-            <SelectContent>
-              {Object.entries(STATUS_LABELS).map(([v, l]) => <SelectItem key={v} value={v}>{l}</SelectItem>)}
-            </SelectContent>
-          </Select>
-        </div>
-        <div className="space-y-1.5"><Label>Скидка</Label><Input value={form.discount} onChange={e => set("discount", e.target.value)} /></div>
-      </div>
-
-      <div className="space-y-1.5">
-        <Label>Комментарий мастера</Label>
-        <Textarea value={form.masterComment} onChange={e => set("masterComment", e.target.value)} rows={2} />
-      </div>
-
-      <div className="flex gap-2 justify-end pt-2 border-t border-border">
-        <Button variant="outline" onClick={onClose}>Отмена</Button>
-        <Button onClick={() => mutation.mutate()} disabled={mutation.isPending}>
-          {mutation.isPending ? "Сохраняю..." : "Сохранить"}
-        </Button>
-      </div>
-    </div>
-  );
-}
-
-// ─── Карточка заявки ───────────────────────────────────────────────────────────
-function RepairCard({ repair }: { repair: Repair }) {
-  const [editOpen, setEditOpen] = useState(false);
-
-  const statusMutation = useMutation({
-    mutationFn: (status: string) => apiRequest("PUT", `/api/orders/${repair.id}/status`, { status }),
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["/api/repairs"] });
-      queryClient.invalidateQueries({ queryKey: ["/api/orders"] });
-    },
-  });
-  const calledMutation = useMutation({
-    mutationFn: (called: boolean) => apiRequest("PUT", `/api/orders/${repair.id}/called`, { called }),
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["/api/repairs"] });
-      queryClient.invalidateQueries({ queryKey: ["/api/orders"] });
-    },
-  });
-
-  const isNew = repair.status === "новая";
-  const deviceLabel = [repair.brand, repair.model].filter(Boolean).join(" ") || repair.deviceType || null;
-
-  return (
-    <>
-      <Card className={`border ${isNew ? "border-blue-400 dark:border-blue-600" : "border-border"}`}>
-        <CardHeader className="pb-2 pt-4 px-4">
-          <div className="flex items-start justify-between gap-2 flex-wrap">
-            <div className="flex items-center gap-2 flex-wrap">
-              <span className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-semibold ${STATUS_COLORS[repair.status] || "bg-muted"}`}>
-                {STATUS_LABELS[repair.status] || repair.status}
-              </span>
-              <span className="text-xs text-muted-foreground flex items-center gap-1">
-                <Calendar className="w-3 h-3" />{formatDate(repair.createdAt)}
-              </span>
-            </div>
-            <div className="flex items-center gap-1.5">
-              <Select value={repair.status} onValueChange={v => statusMutation.mutate(v)} disabled={statusMutation.isPending}>
-                <SelectTrigger className="h-7 text-xs w-36">
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent>
-                  {Object.entries(STATUS_LABELS).map(([v, l]) => <SelectItem key={v} value={v}>{l}</SelectItem>)}
-                </SelectContent>
-              </Select>
-              <Button size="icon" variant="ghost" className="h-7 w-7" onClick={() => setEditOpen(true)}>
-                <Pencil className="w-3.5 h-3.5" />
-              </Button>
-            </div>
-          </div>
-        </CardHeader>
-
-        <CardContent className="px-4 pb-4 space-y-2">
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 text-sm">
-            {repair.clientName && (
-              <div className="flex items-center gap-2">
-                <User className="w-4 h-4 text-muted-foreground shrink-0" />
-                <span className="font-medium">{repair.clientName}</span>
-              </div>
-            )}
-            {repair.phone && (
-              <div className="flex items-center gap-2">
-                <Phone className="w-4 h-4 text-muted-foreground shrink-0" />
-                <a href={`tel:${repair.phone}`} className="text-primary hover:underline font-medium">{repair.phone}</a>
-              </div>
-            )}
-            {repair.location && (
-              <div className="flex items-center gap-2">
-                <MapPin className="w-4 h-4 text-muted-foreground shrink-0" />
-                <span className="text-muted-foreground">{repair.location}</span>
-              </div>
-            )}
-          </div>
-
-          <div className="flex flex-wrap gap-1.5">
-            {deviceLabel && <Badge variant="secondary" className="text-xs gap-1"><Wrench className="w-3 h-3" />{deviceLabel}</Badge>}
-            {repair.imei && <Badge variant="outline" className="text-xs font-mono">IMEI: {repair.imei}</Badge>}
-            {repair.issue && <Badge variant="outline" className="text-xs">{repair.issue}</Badge>}
-            {repair.discount && <Badge className="text-xs bg-orange-500 text-white gap-1"><Tag className="w-3 h-3" />Скидка: {repair.discount}</Badge>}
-          </div>
-
-          {(repair.estimatedPrice || repair.finalPrice || repair.prepayment || repair.deadline || repair.warranty) && (
-            <div className="flex flex-wrap gap-3 text-xs text-muted-foreground border-t border-border/50 pt-2">
-              {(repair.finalPrice || repair.estimatedPrice) && (
-                <span className="flex items-center gap-1 text-green-600 dark:text-green-400 font-medium">
-                  <DollarSign className="w-3 h-3" />
-                  {(repair.finalPrice || repair.estimatedPrice)?.toLocaleString("ru-RU")} ₽
-                </span>
-              )}
-              {repair.prepayment != null && repair.prepayment > 0 && (
-                <span className="flex items-center gap-1">
-                  <CreditCard className="w-3 h-3" />Предоплата: {repair.prepayment.toLocaleString("ru-RU")} ₽
-                </span>
-              )}
-              {repair.deadline && (
-                <span className="flex items-center gap-1">
-                  <Clock className="w-3 h-3" />Выдача: {new Date(repair.deadline).toLocaleDateString("ru-RU")}
-                </span>
-              )}
-              {repair.warranty && (
-                <span className="flex items-center gap-1">
-                  <Shield className="w-3 h-3" />Гарантия: {repair.warranty}
-                </span>
-              )}
-            </div>
-          )}
-
-          {repair.appearance && <p className="text-xs text-muted-foreground">Внешний вид: {repair.appearance}</p>}
-          {repair.masterComment && <p className="text-xs text-muted-foreground italic">💬 {repair.masterComment}</p>}
-          {repair.rawText && (
-            <details className="text-xs text-muted-foreground">
-              <summary className="cursor-pointer hover:text-foreground">Исходное сообщение</summary>
-              <pre className="mt-1 whitespace-pre-wrap font-sans">{repair.rawText}</pre>
-            </details>
-          )}
-
-          {/* Прозвонил */}
-          <div className="flex items-center gap-2 pt-2 border-t border-border/50">
-            <Checkbox
-              id={`called-${repair.id}`}
-              checked={repair.called ?? false}
-              onCheckedChange={v => calledMutation.mutate(!!v)}
-              disabled={calledMutation.isPending}
-              className="data-[state=checked]:bg-green-500 data-[state=checked]:border-green-500"
-            />
-            <label
-              htmlFor={`called-${repair.id}`}
-              className={`text-sm cursor-pointer select-none ${repair.called ? "text-green-600 dark:text-green-400 font-medium" : "text-muted-foreground"}`}
-            >
-              {repair.called ? "Прозвонил" : "Не прозвонил"}
-            </label>
-          </div>
-        </CardContent>
-      </Card>
-
-      <Dialog open={editOpen} onOpenChange={setEditOpen}>
-        <DialogContent className="max-w-2xl max-h-[90vh] overflow-y-auto">
-          <DialogHeader><DialogTitle>Редактировать заявку #{repair.id}</DialogTitle></DialogHeader>
-          <EditRepairForm repair={repair} onClose={() => setEditOpen(false)} />
-        </DialogContent>
-      </Dialog>
-    </>
-  );
-}
-
-// ─── Список заявок ─────────────────────────────────────────────────────────────
-function RepairList({
-  repairs,
-  emptyIcon,
-  emptyText,
-  emptySubtext,
-  action,
-}: {
-  repairs: Repair[];
-  emptyIcon: string;
-  emptyText: string;
-  emptySubtext: string;
-  action?: React.ReactNode;
-}) {
-  if (repairs.length === 0) {
-    return (
-      <div className="text-center py-20 text-muted-foreground">
-        <div className="text-4xl mb-3">{emptyIcon}</div>
-        <p className="font-medium">{emptyText}</p>
-        <p className="text-sm mt-1">{emptySubtext}</p>
-        {action && <div className="mt-4">{action}</div>}
-      </div>
-    );
-  }
-  return (
-    <div className="space-y-3">
-      {repairs.map(r => <RepairCard key={r.id} repair={r} />)}
-    </div>
-  );
-}
-
-// ─── Главная страница ──────────────────────────────────────────────────────────
-export default function OrdersPage() {
-  const [tab, setTab] = useState<"email" | "manual">("email");
-  const [createOpen, setCreateOpen] = useState(false);
-
-  const { data: repairs = [], isLoading } = useQuery<Repair[]>({
-    queryKey: ["/api/repairs"],
+  const { data: orders = [], isLoading } = useQuery<any[]>({
+    queryKey: ["/api/orders"],
+    queryFn: () => fetch("/api/orders", { headers: { Authorization: `Bearer ${token}` } }).then(r => r.json()),
     refetchInterval: 30_000,
   });
 
-  const emailRepairs = repairs.filter(r => r.source === "email");
-  const manualRepairs = repairs.filter(r => r.source === "manual" || !r.source);
+  const statusMutation = useMutation({
+    mutationFn: ({ id, status }: { id: number; status: string }) =>
+      apiRequest(`/api/orders/${id}/status`, "PUT", token!, { status }),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ["/api/orders"] }),
+    onError: () => toast({ title: "Ошибка", description: "Не удалось изменить статус", variant: "destructive" }),
+  });
 
-  const emailNew = emailRepairs.filter(r => r.status === "новая").length;
-  const manualNew = manualRepairs.filter(r => r.status === "новая").length;
+  const calledMutation = useMutation({
+    mutationFn: ({ id, called }: { id: number; called: boolean }) =>
+      apiRequest(`/api/orders/${id}/called`, "PUT", token!, { called }),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ["/api/orders"] }),
+  });
 
-  if (isLoading) return (
-    <div className="max-w-5xl mx-auto px-4 py-8 space-y-4">
-      {[1, 2, 3].map(i => <div key={i} className="h-36 bg-muted animate-pulse rounded-lg" />)}
-    </div>
-  );
+  const filtered = orders.filter(o => {
+    if (!search) return true;
+    const s = search.toLowerCase();
+    return (o.clientName || "").toLowerCase().includes(s) ||
+      (o.phone || "").includes(s) ||
+      (o.device || "").toLowerCase().includes(s) ||
+      (o.issue || "").toLowerCase().includes(s);
+  });
+
+  if (isLoading) return <div className="p-8 text-center text-muted-foreground">Загрузка...</div>;
 
   return (
-    <div className="max-w-5xl mx-auto px-4 py-6">
-      {/* Шапка */}
-      <div className="flex items-center justify-between mb-5 flex-wrap gap-3">
-        <h1 className="text-xl font-bold">Заявки</h1>
-        {tab === "manual" && (
-          <Button onClick={() => setCreateOpen(true)} className="gap-1.5" data-testid="button-create-repair">
-            <Plus className="w-4 h-4" /> Новая заявка
-          </Button>
-        )}
+    <div className="space-y-4">
+      <div className="relative">
+        <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" />
+        <Input className="pl-9" placeholder="Поиск по имени, телефону, устройству..." value={search} onChange={e => setSearch(e.target.value)} />
+        {search && <button className="absolute right-3 top-1/2 -translate-y-1/2" onClick={() => setSearch("")}><X className="w-4 h-4 text-muted-foreground" /></button>}
       </div>
 
-      {/* Вкладки */}
-      <div className="flex gap-1 p-1 bg-muted rounded-lg mb-5 w-fit">
-        <button
-          onClick={() => setTab("email")}
-          className={`flex items-center gap-2 px-4 py-2 rounded-md text-sm font-medium transition-colors ${
-            tab === "email"
-              ? "bg-background text-foreground shadow-sm"
-              : "text-muted-foreground hover:text-foreground"
-          }`}
-        >
-          <Mail className="w-4 h-4" />
-          С почты
-          {emailNew > 0 && (
-            <span className="inline-flex items-center justify-center h-5 min-w-5 px-1 rounded-full bg-blue-500 text-white text-xs font-bold">
-              {emailNew}
-            </span>
-          )}
-        </button>
-        <button
-          onClick={() => setTab("manual")}
-          className={`flex items-center gap-2 px-4 py-2 rounded-md text-sm font-medium transition-colors ${
-            tab === "manual"
-              ? "bg-background text-foreground shadow-sm"
-              : "text-muted-foreground hover:text-foreground"
-          }`}
-        >
-          <ClipboardList className="w-4 h-4" />
-          Ручные
-          {manualNew > 0 && (
-            <span className="inline-flex items-center justify-center h-5 min-w-5 px-1 rounded-full bg-blue-500 text-white text-xs font-bold">
-              {manualNew}
-            </span>
-          )}
-        </button>
-      </div>
-
-      {/* Счётчик */}
-      <p className="text-sm text-muted-foreground mb-4">
-        {tab === "email"
-          ? `${emailRepairs.length} заявок${emailNew > 0 ? ` · ${emailNew} новых` : ""}`
-          : `${manualRepairs.length} заявок${manualNew > 0 ? ` · ${manualNew} новых` : ""}`}
-      </p>
-
-      {/* Контент */}
-      {tab === "email" ? (
-        <RepairList
-          repairs={emailRepairs}
-          emptyIcon="📧"
-          emptyText="Заявок с почты нет"
-          emptySubtext="Они появятся автоматически при получении письма"
-        />
+      {filtered.length === 0 ? (
+        <div className="text-center py-12 text-muted-foreground">
+          {search ? "Ничего не найдено" : "Заявок с почты нет"}
+        </div>
       ) : (
-        <RepairList
-          repairs={manualRepairs}
-          emptyIcon="📋"
-          emptyText="Ручных заявок нет"
-          emptySubtext="Создайте первую заявку для клиента"
-          action={
-            <Button onClick={() => setCreateOpen(true)} className="gap-1.5">
-              <Plus className="w-4 h-4" /> Создать заявку
-            </Button>
-          }
-        />
+        <div className="space-y-2">
+          {filtered.map(order => (
+            <div key={order.id} className="bg-card border border-border rounded-lg p-4 space-y-3">
+              <div className="flex items-start justify-between gap-3">
+                <div className="min-w-0">
+                  <p className="font-medium truncate">{order.clientName || "Без имени"}</p>
+                  <p className="text-sm text-muted-foreground">{order.phone || "—"}</p>
+                  {order.device && <p className="text-sm text-muted-foreground">{order.brand} {order.device}</p>}
+                  {order.issue && <p className="text-sm mt-1">{order.issue}</p>}
+                  <p className="text-xs text-muted-foreground mt-1">{new Date(order.createdAt).toLocaleString("ru")}</p>
+                </div>
+                <div className="flex flex-col items-end gap-2 shrink-0">
+                  <span className={`text-xs px-2 py-0.5 rounded-full font-medium ${statusColors[order.status] || ""}`}>
+                    {statusLabels[order.status] || order.status}
+                  </span>
+                  <button
+                    onClick={() => calledMutation.mutate({ id: order.id, called: !order.called })}
+                    className={`flex items-center gap-1 text-xs px-2 py-1 rounded-md border transition-colors ${order.called ? "bg-green-100 border-green-300 text-green-700 dark:bg-green-900 dark:text-green-200" : "bg-red-50 border-red-200 text-red-600 dark:bg-red-900/30 dark:text-red-400"}`}
+                  >
+                    {order.called ? <Phone className="w-3 h-3" /> : <PhoneOff className="w-3 h-3" />}
+                    {order.called ? "Прозвонил" : "Не прозвонил"}
+                  </button>
+                </div>
+              </div>
+              <div className="flex flex-wrap gap-1.5">
+                {STATUSES.map(s => (
+                  <button
+                    key={s}
+                    onClick={() => statusMutation.mutate({ id: order.id, status: s })}
+                    className={`text-xs px-2 py-1 rounded-md border transition-colors ${order.status === s ? "bg-primary text-primary-foreground border-primary" : "border-border hover:bg-muted"}`}
+                  >
+                    {statusLabels[s]}
+                  </button>
+                ))}
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ─── Manual Orders ────────────────────────────────────────────────────────────
+function ManualOrdersList() {
+  const { token } = useAuth();
+  const qc = useQueryClient();
+  const { toast } = useToast();
+  const [search, setSearch] = useState("");
+  const [formOpen, setFormOpen] = useState(false);
+  const [clientSearch, setClientSearch] = useState("");
+  const [selectedClient, setSelectedClient] = useState<any>(null);
+  const [form, setForm] = useState({ clientName: "", phone: "", deviceType: "", brand: "", model: "", issue: "", estimatedPrice: "", masterId: "" });
+
+  const { data: repairs = [], isLoading } = useQuery<any[]>({
+    queryKey: ["/api/repairs"],
+    queryFn: () => fetch("/api/repairs", { headers: { Authorization: `Bearer ${token}` } }).then(r => r.json()),
+    refetchInterval: 30_000,
+  });
+
+  const { data: clients = [] } = useQuery<any[]>({
+    queryKey: ["/api/clients"],
+    queryFn: () => fetch("/api/clients", { headers: { Authorization: `Bearer ${token}` } }).then(r => r.json()),
+  });
+
+  const { data: users = [] } = useQuery<any[]>({
+    queryKey: ["/api/admin/users"],
+    queryFn: () => fetch("/api/admin/users", { headers: { Authorization: `Bearer ${token}` } }).then(r => r.json()),
+  });
+
+  const statusMutation = useMutation({
+    mutationFn: ({ id, data }: { id: number; data: any }) =>
+      apiRequest(`/api/repairs/${id}`, "PUT", token!, data),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ["/api/repairs"] }),
+  });
+
+  const createMutation = useMutation({
+    mutationFn: (data: any) => apiRequest("/api/repairs", "POST", token!, data),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["/api/repairs"] });
+      setFormOpen(false);
+      setForm({ clientName: "", phone: "", deviceType: "", brand: "", model: "", issue: "", estimatedPrice: "", masterId: "" });
+      setSelectedClient(null);
+      setClientSearch("");
+      toast({ title: "Заявка создана" });
+    },
+    onError: () => toast({ title: "Ошибка", description: "Не удалось создать заявку", variant: "destructive" }),
+  });
+
+  const filtered = repairs.filter(r => {
+    if (!search) return true;
+    const s = search.toLowerCase();
+    return (r.clientName || "").toLowerCase().includes(s) ||
+      (r.phone || "").includes(s) ||
+      (r.brand || "").toLowerCase().includes(s) ||
+      (r.model || "").toLowerCase().includes(s);
+  });
+
+  const filteredClients = clients.filter(c =>
+    clientSearch ? (c.name.toLowerCase().includes(clientSearch.toLowerCase()) || (c.phone || "").includes(clientSearch)) : true
+  ).slice(0, 5);
+
+  const handleSubmit = (e: React.FormEvent) => {
+    e.preventDefault();
+    const now = new Date().toISOString();
+    createMutation.mutate({
+      ...form,
+      clientId: selectedClient?.id || null,
+      clientName: selectedClient?.name || form.clientName,
+      phone: selectedClient?.phone || form.phone,
+      estimatedPrice: form.estimatedPrice ? parseFloat(form.estimatedPrice) : null,
+      masterId: form.masterId ? parseInt(form.masterId) : null,
+      source: "manual",
+      status: "новая",
+      called: false,
+      createdAt: now,
+      updatedAt: now,
+    });
+  };
+
+  if (isLoading) return <div className="p-8 text-center text-muted-foreground">Загрузка...</div>;
+
+  return (
+    <div className="space-y-4">
+      <div className="flex gap-2">
+        <div className="relative flex-1">
+          <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" />
+          <Input className="pl-9" placeholder="Поиск..." value={search} onChange={e => setSearch(e.target.value)} />
+          {search && <button className="absolute right-3 top-1/2 -translate-y-1/2" onClick={() => setSearch("")}><X className="w-4 h-4 text-muted-foreground" /></button>}
+        </div>
+        <Button onClick={() => setFormOpen(true)} className="gap-2 shrink-0"><Plus className="w-4 h-4" />Новая заявка</Button>
+      </div>
+
+      {filtered.length === 0 ? (
+        <div className="text-center py-12 text-muted-foreground">{search ? "Ничего не найдено" : "Ручных заявок нет"}</div>
+      ) : (
+        <div className="space-y-2">
+          {filtered.map(r => (
+            <div key={r.id} className="bg-card border border-border rounded-lg p-4 space-y-3">
+              <div className="flex items-start justify-between gap-3">
+                <div className="min-w-0">
+                  <p className="font-medium truncate">{r.clientName || "Без имени"}</p>
+                  <p className="text-sm text-muted-foreground">{r.phone || "—"}</p>
+                  {(r.brand || r.model) && <p className="text-sm text-muted-foreground">{r.brand} {r.model}</p>}
+                  {r.issue && <p className="text-sm mt-1">{r.issue}</p>}
+                  {r.estimatedPrice && <p className="text-sm font-medium text-green-600 dark:text-green-400">~{r.estimatedPrice.toLocaleString("ru")} ₽</p>}
+                  <p className="text-xs text-muted-foreground mt-1">{new Date(r.createdAt).toLocaleString("ru")}</p>
+                </div>
+                <div className="flex flex-col items-end gap-2 shrink-0">
+                  <span className={`text-xs px-2 py-0.5 rounded-full font-medium ${statusColors[r.status] || ""}`}>
+                    {statusLabels[r.status] || r.status}
+                  </span>
+                  <button
+                    onClick={() => statusMutation.mutate({ id: r.id, data: { called: !r.called } })}
+                    className={`flex items-center gap-1 text-xs px-2 py-1 rounded-md border transition-colors ${r.called ? "bg-green-100 border-green-300 text-green-700 dark:bg-green-900 dark:text-green-200" : "bg-red-50 border-red-200 text-red-600 dark:bg-red-900/30 dark:text-red-400"}`}
+                  >
+                    {r.called ? <Phone className="w-3 h-3" /> : <PhoneOff className="w-3 h-3" />}
+                    {r.called ? "Прозвонил" : "Не прозвонил"}
+                  </button>
+                </div>
+              </div>
+              <div className="flex flex-wrap gap-1.5">
+                {STATUSES.map(s => (
+                  <button key={s} onClick={() => statusMutation.mutate({ id: r.id, data: { status: s } })}
+                    className={`text-xs px-2 py-1 rounded-md border transition-colors ${r.status === s ? "bg-primary text-primary-foreground border-primary" : "border-border hover:bg-muted"}`}>
+                    {statusLabels[s]}
+                  </button>
+                ))}
+              </div>
+            </div>
+          ))}
+        </div>
       )}
 
-      {/* Диалог создания */}
-      <Dialog open={createOpen} onOpenChange={setCreateOpen}>
-        <DialogContent className="max-w-2xl max-h-[90vh] overflow-y-auto">
-          <DialogHeader><DialogTitle>Новая заявка</DialogTitle></DialogHeader>
-          <ManualRepairForm onClose={() => setCreateOpen(false)} />
+      {/* New Repair Form */}
+      <Dialog open={formOpen} onOpenChange={setFormOpen}>
+        <DialogContent className="max-w-lg max-h-[90vh] overflow-y-auto">
+          <DialogHeader><DialogTitle>Новая ручная заявка</DialogTitle></DialogHeader>
+          <form onSubmit={handleSubmit} className="space-y-4">
+            <div>
+              <label className="text-sm font-medium mb-1 block">Поиск клиента</label>
+              <Input placeholder="Имя или телефон..." value={clientSearch} onChange={e => { setClientSearch(e.target.value); setSelectedClient(null); }} />
+              {clientSearch && !selectedClient && filteredClients.length > 0 && (
+                <div className="border border-border rounded-md mt-1 divide-y divide-border">
+                  {filteredClients.map(c => (
+                    <button key={c.id} type="button" onClick={() => { setSelectedClient(c); setClientSearch(c.name); setForm(f => ({ ...f, clientName: c.name, phone: c.phone || "" })); }}
+                      className="w-full text-left px-3 py-2 hover:bg-muted text-sm">
+                      <span className="font-medium">{c.name}</span> {c.phone && <span className="text-muted-foreground ml-2">{c.phone}</span>}
+                    </button>
+                  ))}
+                </div>
+              )}
+              {selectedClient && <p className="text-xs text-green-600 dark:text-green-400 mt-1">Клиент выбран: {selectedClient.name}</p>}
+            </div>
+            {!selectedClient && (
+              <>
+                <div>
+                  <label className="text-sm font-medium mb-1 block">Имя клиента *</label>
+                  <Input value={form.clientName} onChange={e => setForm(f => ({ ...f, clientName: e.target.value }))} required />
+                </div>
+                <div>
+                  <label className="text-sm font-medium mb-1 block">Телефон</label>
+                  <Input value={form.phone} onChange={e => setForm(f => ({ ...f, phone: e.target.value }))} />
+                </div>
+              </>
+            )}
+            <div className="grid grid-cols-2 gap-3">
+              <div>
+                <label className="text-sm font-medium mb-1 block">Бренд</label>
+                <Input value={form.brand} onChange={e => setForm(f => ({ ...f, brand: e.target.value }))} placeholder="Apple, Samsung..." />
+              </div>
+              <div>
+                <label className="text-sm font-medium mb-1 block">Модель</label>
+                <Input value={form.model} onChange={e => setForm(f => ({ ...f, model: e.target.value }))} placeholder="iPhone 13..." />
+              </div>
+            </div>
+            <div>
+              <label className="text-sm font-medium mb-1 block">Неисправность *</label>
+              <Input value={form.issue} onChange={e => setForm(f => ({ ...f, issue: e.target.value }))} required />
+            </div>
+            <div>
+              <label className="text-sm font-medium mb-1 block">Предварительная стоимость (₽)</label>
+              <Input type="number" value={form.estimatedPrice} onChange={e => setForm(f => ({ ...f, estimatedPrice: e.target.value }))} />
+            </div>
+            <div>
+              <label className="text-sm font-medium mb-1 block">Мастер</label>
+              <Select value={form.masterId} onValueChange={v => setForm(f => ({ ...f, masterId: v }))}>
+                <SelectTrigger><SelectValue placeholder="Выберите мастера" /></SelectTrigger>
+                <SelectContent>
+                  {users.map((u: any) => <SelectItem key={u.id} value={String(u.id)}>{u.displayName}</SelectItem>)}
+                </SelectContent>
+              </Select>
+            </div>
+            <div className="flex gap-2 pt-2">
+              <Button type="submit" disabled={createMutation.isPending} className="flex-1">
+                {createMutation.isPending ? "Создаём..." : "Создать заявку"}
+              </Button>
+              <Button type="button" variant="outline" onClick={() => setFormOpen(false)}>Отмена</Button>
+            </div>
+          </form>
         </DialogContent>
       </Dialog>
+    </div>
+  );
+}
+
+// ─── Main ─────────────────────────────────────────────────────────────────────
+export default function OrdersPage() {
+  return (
+    <div className="p-4 md:p-6 max-w-4xl mx-auto">
+      <h1 className="text-xl font-bold mb-4">Заявки</h1>
+      <Tabs defaultValue="email">
+        <TabsList className="mb-4">
+          <TabsTrigger value="email">С почты</TabsTrigger>
+          <TabsTrigger value="manual">Ручные</TabsTrigger>
+        </TabsList>
+        <TabsContent value="email"><EmailOrdersList /></TabsContent>
+        <TabsContent value="manual"><ManualOrdersList /></TabsContent>
+      </Tabs>
     </div>
   );
 }
