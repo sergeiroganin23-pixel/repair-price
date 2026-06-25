@@ -198,6 +198,26 @@ sqlite.exec(`
   );
 `);
 
+// ─── Safe column migrations (ALTER TABLE для старых БД) ─────────────────────
+const safeAlter = (sql: string) => { try { sqlite.exec(sql); } catch {} };
+
+// sessions: если таблица была создана без id (старая версия) — пересоздаём
+try {
+  const cols = sqlite.prepare("PRAGMA table_info(sessions)").all() as any[];
+  const hasId = cols.some((c: any) => c.name === "id");
+  if (!hasId) {
+    sqlite.exec(`
+      DROP TABLE IF EXISTS sessions;
+      CREATE TABLE sessions (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        user_id INTEGER NOT NULL,
+        session_id TEXT NOT NULL UNIQUE,
+        created_at TEXT NOT NULL
+      );
+    `);
+  }
+} catch {}
+
 // Seed default data if empty
 function seedIfEmpty() {
   const existingUsers = db.select().from(users).all();
