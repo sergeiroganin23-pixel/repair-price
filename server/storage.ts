@@ -2,7 +2,7 @@ import { drizzle } from "drizzle-orm/better-sqlite3";
 import Database from "better-sqlite3";
 import { eq, desc } from "drizzle-orm";
 import {
-  users, categories, subcategories, deviceModels, services, suppliers, changeRequests, orders,
+  users, categories, subcategories, deviceModels, services, suppliers, changeRequests, orders, sessions,
   type User, type InsertUser,
   type Category, type InsertCategory,
   type Subcategory, type InsertSubcategory,
@@ -11,6 +11,7 @@ import {
   type Supplier, type InsertSupplier,
   type ChangeRequest, type InsertChangeRequest,
   type Order, type InsertOrder,
+  type Session,
 } from "@shared/schema";
 import bcrypt from "bcryptjs";
 
@@ -78,6 +79,11 @@ sqlite.exec(`
     proposed_value TEXT,
     status TEXT NOT NULL DEFAULT 'pending',
     admin_comment TEXT,
+    created_at TEXT NOT NULL
+  );
+  CREATE TABLE IF NOT EXISTS sessions (
+    user_id INTEGER NOT NULL UNIQUE,
+    session_id TEXT NOT NULL,
     created_at TEXT NOT NULL
   );
   CREATE TABLE IF NOT EXISTS orders (
@@ -234,6 +240,11 @@ export interface IStorage {
   createChangeRequest(data: InsertChangeRequest): ChangeRequest;
   updateChangeRequestStatus(id: number, status: string, adminComment?: string): ChangeRequest | undefined;
 
+  // Sessions
+  upsertSession(userId: number, sessionId: string): void;
+  getSession(userId: number): Session | undefined;
+  deleteSession(userId: number): void;
+
   // Orders
   getOrders(): Order[];
   getNewOrdersCount(): number;
@@ -348,6 +359,20 @@ export class SQLiteStorage implements IStorage {
     const updateData: any = { status };
     if (adminComment !== undefined) updateData.adminComment = adminComment;
     return db.update(changeRequests).set(updateData).where(eq(changeRequests.id, id)).returning().get();
+  }
+
+  // ─── Sessions ────────────────────────────────────────────────────────────────────
+  upsertSession(userId: number, sessionId: string) {
+    sqlite.prepare(
+      `INSERT INTO sessions (user_id, session_id, created_at) VALUES (?, ?, ?)
+       ON CONFLICT(user_id) DO UPDATE SET session_id = excluded.session_id, created_at = excluded.created_at`
+    ).run(userId, sessionId, new Date().toISOString());
+  }
+  getSession(userId: number) {
+    return db.select().from(sessions).where(eq(sessions.userId, userId)).get();
+  }
+  deleteSession(userId: number) {
+    db.delete(sessions).where(eq(sessions.userId, userId)).run();
   }
 
   // ─── Orders ───────────────────────────────────────────────────────────────────────

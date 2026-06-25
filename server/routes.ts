@@ -2,6 +2,7 @@ import type { Express, Request, Response, NextFunction } from "express";
 import type { Server } from "http";
 import bcrypt from "bcryptjs";
 import jwt from "jsonwebtoken";
+import { randomUUID } from "crypto";
 import rateLimit from "express-rate-limit";
 import { storage } from "./storage";
 
@@ -24,7 +25,7 @@ const apiLimiter = rateLimit({
 
 // Auth middleware
 interface AuthRequest extends Request {
-  user?: { id: number; role: string; displayName: string };
+  user?: { id: number; role: string; displayName: string; sessionId?: string };
 }
 
 function authenticateToken(req: AuthRequest, res: Response, next: NextFunction) {
@@ -33,6 +34,13 @@ function authenticateToken(req: AuthRequest, res: Response, next: NextFunction) 
   if (!token) return res.status(401).json({ error: "Требуется авторизация" });
   try {
     const payload = jwt.verify(token, JWT_SECRET) as any;
+    // Проверяем sessionId — если зашли с другого устройства, выкидываем
+    if (payload.sessionId) {
+      const session = storage.getSession(payload.id);
+      if (!session || session.sessionId !== payload.sessionId) {
+        return res.status(401).json({ error: "Сессия завершена. Войдите снова." });
+      }
+    }
     req.user = payload;
     next();
   } catch {
@@ -64,16 +72,23 @@ export function registerRoutes(httpServer: Server, app: Express) {
     if (!user) return res.status(401).json({ error: "Неверный логин или пароль" });
     const valid = bcrypt.compareSync(password, user.passwordHash);
     if (!valid) return res.status(401).json({ error: "Неверный логин или пароль" });
+    const sessionId = randomUUID();
+    storage.upsertSession(user.id, sessionId);
     const token = jwt.sign(
-      { id: user.id, role: user.role, displayName: user.displayName },
+      { id: user.id, role: user.role, displayName: user.displayName, sessionId },
       JWT_SECRET,
-      { expiresIn: "8h" }
+      { expiresIn: "30d" } // долгоживущий токен — выход только вручную или с другого устройства
     );
     res.json({ token, role: user.role, displayName: user.displayName });
   });
 
   app.get("/api/auth/me", authenticateToken, (req: AuthRequest, res: Response) => {
     res.json(req.user);
+  });
+
+  app.post("/api/auth/logout", authenticateToken, (req: AuthRequest, res: Response) => {
+    if (req.user?.id) storage.deleteSession(req.user.id);
+    res.json({ ok: true });
   });
 
   // ─── Categories ───────────────────────────────────────────────────────────

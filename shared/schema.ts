@@ -127,3 +127,11 @@ export const insertChangeRequestSchema = createInsertSchema(changeRequests).omit
 });
 export type InsertChangeRequest = z.infer<typeof insertChangeRequestSchema>;
 export type ChangeRequest = typeof changeRequests.$inferSelect;
+
+// ─── Sessions ─────────────────────────────────────────────────────────────────────
+export const sessions = sqliteTable("sessions", {
+  userId: integer("user_id").notNull().unique(), // one session per user
+  sessionId: text("session_id").notNull(),
+  createdAt: text("created_at").notNull(),
+});
+export type Session = typeof sessions.$inferSelect;

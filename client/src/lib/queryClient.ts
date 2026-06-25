@@ -33,6 +33,11 @@ export const queryClient = new QueryClient({
       queryFn: async ({ queryKey }) => {
         const path = Array.isArray(queryKey) ? queryKey[0] as string : queryKey as string;
         const res = await apiRequest("GET", path);
+        if (res.status === 401) {
+          // Сессия завершена (вход с другого устройства или истёк токен)
+          window.dispatchEvent(new Event("auth:logout"));
+          throw new Error("Сессия завершена");
+        }
         if (!res.ok) {
           const err = await res.json().catch(() => ({ error: res.statusText }));
           throw new Error(err.error || "Ошибка запроса");
