@@ -30,15 +30,21 @@ function parseQuizEmail(text: string, subject: string) {
     return undefined;
   }
 
-  // Ищем ответы на вопросы квиза
+  // Ищем ответы на вопросы квиза (поддержка форматов: "Вопрос → Ответ" и "Вопрос:\nОтвет: ...")
   function extractAnswer(question: string): string | undefined {
     for (let i = 0; i < lines.length; i++) {
       if (lines[i].toLowerCase().includes(question.toLowerCase())) {
-        // Ответ после стрелки
+        // Формат 1: Вопрос: ... → Ответ
         const arrow = lines[i].match(/→\s*(.+)$/);
         if (arrow) return arrow[1].trim();
-        // Или следующая строка
-        if (i + 1 < lines.length) return lines[i + 1];
+        // Формат 2 (Envybox): следующая строка "Ответ: ..."
+        if (i + 1 < lines.length) {
+          const nextLine = lines[i + 1];
+          const answerMatch = nextLine.match(/^ответ[:\s]+(.+)$/i);
+          if (answerMatch) return answerMatch[1].trim();
+          // Просто следующая строка
+          if (!nextLine.toLowerCase().startsWith("вопрос")) return nextLine;
+        }
       }
     }
     return undefined;
@@ -55,10 +61,17 @@ function parseQuizEmail(text: string, subject: string) {
   let brand = extractAnswer("Выберите марку");
   let issue = extractAnswer("Выберите неисправность");
 
+  // Дополнительные поля из Envybox формата
+  let model = extractAnswer("Выберите модель") || extractAnswer("модель");
+
   // Fallback: попробуем найти по другим паттернам
-  if (!device) device = extractAnswer("Тип устройства");
-  if (!brand) brand = extractAnswer("марку телефона") || extractAnswer("Марка");
-  if (!issue) issue = extractAnswer("неисправность") || extractAnswer("Проблема");
+  if (!device) device = extractAnswer("Тип устройства") || extractAnswer("тип устройства");
+  if (!brand) brand = extractAnswer("марку телефона") || extractAnswer("Марка") || extractAnswer("марку");
+  if (!issue) issue = extractAnswer("неисправность") || extractAnswer("Проблема") || extractAnswer("Какая у вас");
+
+  // Если есть модель — добавляем к бренду для наглядности
+  if (model && brand) brand = `${brand} ${model}`;
+  else if (model) brand = model;
 
   return {
     clientName: clientName || null,
@@ -81,7 +94,7 @@ async function pollOnce() {
 
     // Ищем все письма, которые содержат слово "заявку" в теме
     // Или от квиз-сервиса
-    const searchCriteria = [["SUBJECT", "заявку"]];
+    const searchCriteria = [["SUBJECT", "заявк"]];
     const fetchOptions = {
       bodies: ["HEADER", "TEXT", ""],
       markSeen: true,
