@@ -310,6 +310,16 @@ export const insertRepairPartSchema = createInsertSchema(repairParts).omit({ id:
 export type InsertRepairPart = z.infer<typeof insertRepairPartSchema>;
 export type RepairPart = typeof repairParts.$inferSelect;
 
+
+// ─── Part ↔ Device Models (many-to-many) ─────────────────────────────────────
+// Одна запчасть может подходить нескольким моделям устройств
+export const partDeviceModels = sqliteTable("part_device_models", {
+  id: integer("id").primaryKey({ autoIncrement: true }),
+  partId: integer("part_id").notNull(),
+  deviceModelId: integer("device_model_id").notNull(), // ссылка на device_models_repair
+});
+export type PartDeviceModel = typeof partDeviceModels.$inferSelect;
+
 // ─── Part Categories (управляемые категории склада) ───────────────────────────
 export const partCategories = sqliteTable("part_categories", {
   id: integer("id").primaryKey({ autoIncrement: true }),

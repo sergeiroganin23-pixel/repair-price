@@ -627,7 +627,7 @@ function EditRepairForm({ repair, onClose }: { repair: Repair; onClose: () => vo
 
 
 // ─── Секция запчастей и работ в карточке заявки ────────────────────────────
-function RepairPartsSection({ repairId }: { repairId: number }) {
+function RepairPartsSection({ repairId, repairModel }: { repairId: number; repairModel?: string }) {
   const { toast } = useToast();
   const [addOpen, setAddOpen] = useState(false);
   const [addType, setAddType] = useState<"part" | "work">("part");
@@ -642,10 +642,33 @@ function RepairPartsSection({ repairId }: { repairId: number }) {
     queryFn: () => apiRequest("GET", `/api/repairs/${repairId}/parts`).then(r => r.json()),
   });
 
+  // Ищем ID модели по имени из заказа
+  const { data: allModels = [] } = useQuery<{id: number; name: string; brandId: number}[]>({
+    queryKey: ["/api/device-models-repair"],
+    queryFn: () => apiRequest("GET", "/api/device-models-repair").then(r => r.json()),
+    enabled: addOpen && addType === "part",
+  });
+  const matchedModel = allModels.find(m => repairModel && m.name.toLowerCase() === repairModel.toLowerCase());
+
   const { data: stockParts = [] } = useQuery<Part[]>({
     queryKey: ["/api/parts"],
     enabled: addOpen && addType === "part",
   });
+
+  // Запчасти привязанные к модели заказа
+  const { data: modelParts = [] } = useQuery<Part[]>({
+    queryKey: ["/api/parts/by-model", matchedModel?.id],
+    queryFn: () => matchedModel
+      ? apiRequest("GET", `/api/parts/by-model/${matchedModel.id}`).then(r => r.json())
+      : Promise.resolve([]),
+    enabled: addOpen && addType === "part" && !!matchedModel,
+  });
+
+  // Если есть совпадение модели — показываем только её запчасти, иначе все
+  const [useModelFilter, setUseModelFilter] = useState(true);
+  const effectiveStock = (useModelFilter && matchedModel && modelParts.length > 0)
+    ? modelParts
+    : stockParts;
 
   const addMutation = useMutation({
     mutationFn: async () => {
@@ -771,6 +794,17 @@ function RepairPartsSection({ repairId }: { repairId: number }) {
 
             {addType === "part" ? (
               <>
+                {matchedModel && (
+                  <div className="flex items-center justify-between px-2 py-1.5 bg-blue-50 dark:bg-blue-900/20 rounded-lg text-xs">
+                    <span className="text-blue-700 dark:text-blue-400 flex items-center gap-1">
+                      <Package className="w-3 h-3" /> Модель заказа: <strong>{repairModel}</strong>
+                      {modelParts.length > 0 && <span className="ml-1 text-muted-foreground">({modelParts.length} запчастей)</span>}
+                    </span>
+                    <button onClick={() => setUseModelFilter(v => !v)} className="text-blue-600 dark:text-blue-400 underline">
+                      {useModelFilter ? "Показать все" : "Только для модели"}
+                    </button>
+                  </div>
+                )}
                 {cats.length > 0 && (
                   <div className="space-y-1.5">
                     <Label className="text-xs">Фильтр по категории</Label>
@@ -792,7 +826,7 @@ function RepairPartsSection({ repairId }: { repairId: number }) {
                     <SelectContent className="max-h-48">
                       {filteredStock.length === 0
                         ? <SelectItem value="" disabled>Нет запчастей на складе</SelectItem>
-                        : filteredStock.map(p => (
+                        : effectiveStock.map(p => (
                             <SelectItem key={p.id} value={p.id.toString()} disabled={p.quantity === 0}>
                               <span className={p.quantity === 0 ? "opacity-40" : ""}>
                                 {p.name}
@@ -980,7 +1014,7 @@ function RepairCard({ repair, showCalled = true }: { repair: Repair; showCalled?
           )}
 
           {/* Запчасти и работы */}
-          <RepairPartsSection repairId={repair.id} />
+          <RepairPartsSection repairId={repair.id} repairModel={repair.model || undefined} />
         </CardContent>
       </Card>
 

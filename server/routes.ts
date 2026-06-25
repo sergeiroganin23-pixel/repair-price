@@ -747,6 +747,23 @@ export function registerRoutes(httpServer: Server, app: Express) {
     res.json(result);
   });
 
+
+  // ─── Part Device Models (привязка запчасти к моделям) ──────────────────────────
+  // GET /api/parts/:id/models — получить модели для запчасти
+  app.get("/api/parts/:id/models", authenticateToken, (req: AuthRequest, res: Response) => {
+    res.json(storage.getPartDeviceModels(parseInt(req.params.id)));
+  });
+  // PUT /api/parts/:id/models — сохранить список моделей для запчасти
+  app.put("/api/parts/:id/models", authenticateToken, requireAdmin, (req: AuthRequest, res: Response) => {
+    const { modelIds } = req.body; // number[]
+    storage.setPartDeviceModels(parseInt(req.params.id), modelIds || []);
+    res.json({ ok: true });
+  });
+  // GET /api/parts/by-model/:modelId — запчасти для конкретной модели
+  app.get("/api/parts/by-model/:modelId", authenticateToken, (req: AuthRequest, res: Response) => {
+    res.json(storage.getPartsByDeviceModel(parseInt(req.params.modelId)));
+  });
+
   // ─── Cashboxes ──────────────────────────────────────────────────────────────────────────────
   app.get("/api/cashboxes", authenticateToken, (req: AuthRequest, res: Response) => {
     const activeOnly = req.query.active === "true";

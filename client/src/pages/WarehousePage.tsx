@@ -14,7 +14,7 @@ import {
   Package, Plus, Pencil, Trash2, ArrowDownCircle, ArrowUpCircle,
   Search, AlertTriangle, History, X,
 } from "lucide-react";
-import type { Part, PartMovement, PartCategory } from "@shared/schema";
+import type { Part, PartMovement, PartCategory, DeviceModelRepair, DeviceBrand } from "@shared/schema";
 
 function formatDate(iso: string) {
   try {
@@ -32,6 +32,43 @@ function PartForm({ part, onClose }: { part?: Part; onClose: () => void }) {
     queryKey: ["/api/part-categories"],
     queryFn: () => apiRequest("GET", "/api/part-categories").then(r => r.json()),
   });
+  const { data: allBrands = [] } = useQuery<DeviceBrand[]>({
+    queryKey: ["/api/device-brands"],
+    queryFn: () => apiRequest("GET", "/api/device-brands").then(r => r.json()),
+  });
+  const { data: allModels = [] } = useQuery<DeviceModelRepair[]>({
+    queryKey: ["/api/device-models-repair"],
+    queryFn: () => apiRequest("GET", "/api/device-models-repair").then(r => r.json()),
+  });
+  // Загружаем привязанные модели для существующей запчасти
+  const { data: linkedModelIds = [] } = useQuery<{id: number; device_model_id: number}[]>({
+    queryKey: ["/api/parts", part?.id, "models"],
+    queryFn: () => part
+      ? apiRequest("GET", `/api/parts/${part.id}/models`).then(r => r.json())
+      : Promise.resolve([]),
+    enabled: !!part,
+  });
+
+  const [selectedModels, setSelectedModels] = useState<number[]>([]);
+  const [filterBrandId, setFilterBrandId] = useState<string>("all");
+
+  // Инициализируем выбранные модели когда загрузились
+  const [modelsInitialized, setModelsInitialized] = useState(false);
+  if (!modelsInitialized && linkedModelIds.length > 0) {
+    setSelectedModels(linkedModelIds.map((m: any) => m.device_model_id));
+    setModelsInitialized(true);
+  }
+
+  const toggleModel = (id: number) => {
+    setSelectedModels(prev =>
+      prev.includes(id) ? prev.filter(x => x !== id) : [...prev, id]
+    );
+  };
+
+  const filteredModels = filterBrandId === "all"
+    ? allModels
+    : allModels.filter(m => m.brandId === parseInt(filterBrandId));
+
   const [form, setForm] = useState({
     name: part?.name || "",
     sku: part?.sku || "",
@@ -53,8 +90,15 @@ function PartForm({ part, onClose }: { part?: Part; onClose: () => void }) {
         buyPrice: form.buyPrice ? parseFloat(form.buyPrice) : null,
         sellPrice: form.sellPrice ? parseFloat(form.sellPrice) : null,
       };
-      if (part) return apiRequest("PUT", `/api/parts/${part.id}`, data).then(r => r.json());
-      return apiRequest("POST", "/api/parts", data).then(r => r.json());
+      let saved: Part;
+      if (part) {
+        saved = await apiRequest("PUT", `/api/parts/${part.id}`, data).then(r => r.json());
+      } else {
+        saved = await apiRequest("POST", "/api/parts", data).then(r => r.json());
+      }
+      // Сохраняем привязку моделей
+      await apiRequest("PUT", `/api/parts/${saved.id}/models`, { modelIds: selectedModels });
+      return saved;
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["/api/parts"] });
@@ -111,6 +155,46 @@ function PartForm({ part, onClose }: { part?: Part; onClose: () => void }) {
       <div className="space-y-1.5">
         <Label>Заметки</Label>
         <Textarea value={form.notes} onChange={e => set("notes", e.target.value)} rows={2} placeholder="Поставщик, особенности..." />
+      </div>
+
+      {/* Привязка к моделям устройств */}
+      <div className="space-y-2">
+        <div className="flex items-center justify-between">
+          <Label className="text-sm font-medium">Модели устройств</Label>
+          {selectedModels.length > 0 && (
+            <span className="text-xs text-muted-foreground">{selectedModels.length} выбрано</span>
+          )}
+        </div>
+        <p className="text-xs text-muted-foreground">Запчасть будет предлагаться в заказах с этими моделями</p>
+        {allBrands.length > 0 && (
+          <Select value={filterBrandId} onValueChange={setFilterBrandId}>
+            <SelectTrigger className="h-7 text-xs"><SelectValue placeholder="Фильтр по марке" /></SelectTrigger>
+            <SelectContent>
+              <SelectItem value="all">Все марки</SelectItem>
+              {allBrands.map(b => <SelectItem key={b.id} value={b.id.toString()}>{b.name}</SelectItem>)}
+            </SelectContent>
+          </Select>
+        )}
+        {filteredModels.length > 0 ? (
+          <div className="max-h-36 overflow-y-auto border border-border rounded-lg p-2 space-y-1">
+            {filteredModels.map(m => {
+              const checked = selectedModels.includes(m.id);
+              return (
+                <label key={m.id} className={`flex items-center gap-2 px-2 py-1 rounded cursor-pointer text-sm transition-colors ${checked ? "bg-primary/10 text-primary" : "hover:bg-muted"}`}>
+                  <input type="checkbox" checked={checked} onChange={() => toggleModel(m.id)} className="accent-primary w-3.5 h-3.5" />
+                  {m.name}
+                </label>
+              );
+            })}
+          </div>
+        ) : (
+          <p className="text-xs text-muted-foreground italic">Нет моделей. Добавьте марки и модели в Админ панели.</p>
+        )}
+        {selectedModels.length > 0 && (
+          <button onClick={() => setSelectedModels([])} className="text-xs text-muted-foreground hover:text-destructive transition-colors">
+            Сбросить выбор
+          </button>
+        )}
       </div>
 
       <div className="flex gap-2 justify-end pt-2 border-t border-border">

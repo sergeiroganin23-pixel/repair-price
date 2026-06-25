@@ -5,7 +5,7 @@ import {
   users, categories, subcategories, deviceModels, services, suppliers, changeRequests, repairs, sessions, clients,
   parts, partMovements, transactions, salaries,
   repairStatuses, deviceBrands, deviceModelsRepair, repairIssues,
-  partCategories, cashboxes, repairParts,
+  partCategories, cashboxes, repairParts, partDeviceModels,
   type User, type InsertUser,
   type Category, type InsertCategory,
   type Subcategory, type InsertSubcategory,
@@ -27,6 +27,7 @@ import {
   type PartCategory, type InsertPartCategory,
   type Cashbox, type InsertCashbox,
   type RepairPart, type InsertRepairPart,
+  type PartDeviceModel,
 } from "@shared/schema";
 import bcrypt from "bcryptjs";
 
@@ -240,6 +241,11 @@ sqlite.exec(`
     type TEXT NOT NULL DEFAULT 'cash',
     is_active INTEGER NOT NULL DEFAULT 1,
     sort_order INTEGER NOT NULL DEFAULT 0
+  );
+  CREATE TABLE IF NOT EXISTS part_device_models (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    part_id INTEGER NOT NULL,
+    device_model_id INTEGER NOT NULL
   );
   CREATE TABLE IF NOT EXISTS repair_parts (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -902,6 +908,28 @@ export class SQLiteStorage implements IStorage {
   }
   deleteCashbox(id: number) {
     db.delete(cashboxes).where(eq(cashboxes.id, id)).run();
+  }
+
+  // ─── Part ↔ Device Models ──────────────────────────────────────────────────────
+  getPartDeviceModels(partId: number): PartDeviceModel[] {
+    return (db as any).prepare("SELECT * FROM part_device_models WHERE part_id = ?").all(partId) as PartDeviceModel[];
+  }
+  setPartDeviceModels(partId: number, modelIds: number[]) {
+    // Удаляем старые, вставляем новые
+    (db as any).prepare("DELETE FROM part_device_models WHERE part_id = ?").run(partId);
+    const ins = (db as any).prepare("INSERT INTO part_device_models (part_id, device_model_id) VALUES (?, ?)");
+    for (const id of modelIds) {
+      ins.run(partId, id);
+    }
+  }
+  // Получить запчасти для конкретной модели устройства
+  getPartsByDeviceModel(deviceModelId: number): any[] {
+    return (db as any).prepare(`
+      SELECT p.* FROM parts p
+      JOIN part_device_models pdm ON pdm.part_id = p.id
+      WHERE pdm.device_model_id = ?
+      ORDER BY p.name
+    `).all(deviceModelId) as any[];
   }
 
   // ─── Repair Parts (запчасти и работы в заявке) ───────────────────────────────
