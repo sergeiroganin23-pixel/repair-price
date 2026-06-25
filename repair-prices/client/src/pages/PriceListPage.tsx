@@ -41,15 +41,7 @@ function ServiceRow({ service }: { service: Service }) {
 
 // ─── Model Accordion ──────────────────────────────────────────────────────
 function ModelAccordion({ model, search }: { model: DeviceModel; search: string }) {
-  const isSearching = search.trim().length > 0;
-  const nameMatches = model.name.toLowerCase().includes(search.toLowerCase());
-
-  // Если идёт поиск и название модели не совпадает — не показываем
-  if (isSearching && !nameMatches) return null;
-
   const [open, setOpen] = useState(false);
-  // Авторазкрытие при поиске
-  const isOpen = isSearching ? true : open;
 
   const { data: services, isLoading } = useQuery<Service[]>({
     queryKey: ["/api/services", model.id],
@@ -58,36 +50,43 @@ function ModelAccordion({ model, search }: { model: DeviceModel; search: string 
       if (!res.ok) throw new Error("Ошибка загрузки");
       return res.json();
     },
-    enabled: isOpen,
+    enabled: open,
   });
+
+  const filtered = services?.filter(s =>
+    search ? s.name.toLowerCase().includes(search.toLowerCase()) : true
+  );
+
+  const matchesSearch = !search || model.name.toLowerCase().includes(search.toLowerCase()) || (services && services.some(s => s.name.toLowerCase().includes(search.toLowerCase())));
+  if (search && !matchesSearch && services) return null;
 
   return (
     <div className="border border-border rounded-xl overflow-hidden mb-2">
       <button
         data-testid={`accordion-model-${model.id}`}
-        onClick={() => !isSearching && setOpen(v => !v)}
+        onClick={() => setOpen(v => !v)}
         className="w-full flex items-center justify-between px-4 py-3 bg-card hover:bg-muted/30 transition-colors text-left"
       >
         <span className="font-medium text-sm">{model.name}</span>
-        {!isSearching && (
-          <ChevronDown className={`w-4 h-4 text-muted-foreground transition-transform duration-200 ${isOpen ? "rotate-180" : ""}`} />
-        )}
+        <ChevronDown className={`w-4 h-4 text-muted-foreground transition-transform duration-200 ${open ? "rotate-180" : ""}`} />
       </button>
 
-      {isOpen && (
+      {open && (
         <div className="accordion-content border-t border-border bg-card/50 px-2 py-1">
           {isLoading ? (
             <div className="space-y-2 p-2">
               {[1, 2, 3].map(i => <Skeleton key={i} className="h-9 w-full" />)}
             </div>
-          ) : services && services.length > 0 ? (
+          ) : filtered && filtered.length > 0 ? (
             <div>
-              {services.map(svc => (
+              {filtered.map(svc => (
                 <ServiceRow key={svc.id} service={svc} />
               ))}
             </div>
           ) : (
-            <p className="text-sm text-muted-foreground text-center py-4">Услуги не добавлены</p>
+            <p className="text-sm text-muted-foreground text-center py-4">
+              {search ? "Нет совпадений" : "Услуги не добавлены"}
+            </p>
           )}
         </div>
       )}

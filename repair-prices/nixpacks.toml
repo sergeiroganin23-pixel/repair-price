@@ -1,0 +1,5 @@
+[phases.setup]
+nixPkgs = ["python3", "nodePackages.node-gyp", "nodejs_20"]
+
+[phases.build]
+cmds = ["npm ci", "npm run build"]
