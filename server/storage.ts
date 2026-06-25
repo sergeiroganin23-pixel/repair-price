@@ -3,7 +3,7 @@ import Database from "better-sqlite3";
 import { eq, desc } from "drizzle-orm";
 import {
   users, categories, subcategories, deviceModels, services, suppliers, changeRequests, repairs, sessions, clients,
-  parts, partMovements,
+  parts, partMovements, transactions,
   type User, type InsertUser,
   type Category, type InsertCategory,
   type Subcategory, type InsertSubcategory,
@@ -16,6 +16,7 @@ import {
   type Session,
   type Part, type InsertPart,
   type PartMovement, type InsertPartMovement,
+  type Transaction, type InsertTransaction,
 } from "@shared/schema";
 import bcrypt from "bcryptjs";
 
@@ -167,6 +168,17 @@ sqlite.exec(`
     repair_id INTEGER,
     comment TEXT,
     created_at TEXT NOT NULL
+  );
+  CREATE TABLE IF NOT EXISTS transactions (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    type TEXT NOT NULL,
+    amount REAL NOT NULL,
+    category TEXT NOT NULL,
+    description TEXT,
+    repair_id INTEGER,
+    payment_method TEXT DEFAULT 'cash',
+    created_at TEXT NOT NULL,
+    date TEXT NOT NULL
   );
 `);
 
@@ -346,6 +358,13 @@ export interface IStorage {
   adjustPartQuantity(id: number, delta: number): Part | undefined;
   getMovementsByPart(partId: number): PartMovement[];
   createMovement(data: InsertPartMovement): PartMovement;
+
+  // Transactions
+  getTransactions(from?: string, to?: string): Transaction[];
+  getTransactionById(id: number): Transaction | undefined;
+  createTransaction(data: InsertTransaction): Transaction;
+  updateTransaction(id: number, data: Partial<InsertTransaction>): Transaction | undefined;
+  deleteTransaction(id: number): void;
 }
 
 export class SQLiteStorage implements IStorage {
@@ -568,6 +587,26 @@ export class SQLiteStorage implements IStorage {
   }
   createMovement(data: InsertPartMovement) {
     return db.insert(partMovements).values(data).returning().get();
+  }
+
+  // ─── Transactions ────────────────────────────────────────────────────────────────
+  getTransactions(from?: string, to?: string) {
+    let all = db.select().from(transactions).orderBy(desc(transactions.date)).all();
+    if (from) all = all.filter(t => t.date >= from);
+    if (to)   all = all.filter(t => t.date <= to);
+    return all;
+  }
+  getTransactionById(id: number) {
+    return db.select().from(transactions).where(eq(transactions.id, id)).get();
+  }
+  createTransaction(data: InsertTransaction) {
+    return db.insert(transactions).values(data).returning().get();
+  }
+  updateTransaction(id: number, data: Partial<InsertTransaction>) {
+    return db.update(transactions).set(data).where(eq(transactions.id, id)).returning().get();
+  }
+  deleteTransaction(id: number) {
+    db.delete(transactions).where(eq(transactions.id, id)).run();
   }
 }
 

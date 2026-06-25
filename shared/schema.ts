@@ -182,6 +182,23 @@ export const insertPartMovementSchema = createInsertSchema(partMovements).omit({
 export type InsertPartMovement = z.infer<typeof insertPartMovementSchema>;
 export type PartMovement = typeof partMovements.$inferSelect;
 
+// ─── Transactions (Касса) ──────────────────────────────────────────────────
+export const transactions = sqliteTable("transactions", {
+  id: integer("id").primaryKey({ autoIncrement: true }),
+  type: text("type").notNull(),        // "income" | "expense"
+  amount: real("amount").notNull(),
+  category: text("category").notNull(), // Ремонт, Закупка, Аренда...
+  description: text("description"),
+  repairId: integer("repair_id"),       // если связано с заявкой
+  paymentMethod: text("payment_method").default("cash"), // cash | card | transfer
+  createdAt: text("created_at").notNull(),
+  date: text("date").notNull(),          // дата операции YYYY-MM-DD
+});
+
+export const insertTransactionSchema = createInsertSchema(transactions).omit({ id: true });
+export type InsertTransaction = z.infer<typeof insertTransactionSchema>;
+export type Transaction = typeof transactions.$inferSelect;
+
 // ─── Change Requests ──────────────────────────────────────────────────────────
 export const changeRequests = sqliteTable("change_requests", {
   id: integer("id").primaryKey({ autoIncrement: true }),

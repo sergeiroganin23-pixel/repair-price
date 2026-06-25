@@ -510,4 +510,46 @@ export function registerRoutes(httpServer: Server, app: Express) {
     const updated = storage.adjustPartQuantity(partId, -quantity);
     res.json(updated);
   });
+
+  // ─── Transactions (Касса) ──────────────────────────────────────────────────────────
+  app.get("/api/transactions", authenticateToken, (req: AuthRequest, res: Response) => {
+    const { from, to } = req.query as { from?: string; to?: string };
+    res.json(storage.getTransactions(from, to));
+  });
+
+  app.post("/api/transactions", authenticateToken, (req: AuthRequest, res: Response) => {
+    const { type, amount, category, description, repairId, paymentMethod, date } = req.body;
+    if (!type || !amount || !category) {
+      return res.status(400).json({ error: "Тип, сумма и категория обязательны" });
+    }
+    if (!['income', 'expense'].includes(type)) {
+      return res.status(400).json({ error: "Тип должен быть income или expense" });
+    }
+    const now = new Date().toISOString();
+    const txDate = date || now.slice(0, 10);
+    const tx = storage.createTransaction({
+      type, amount: parseFloat(amount), category,
+      description: description || null,
+      repairId: repairId ?? null,
+      paymentMethod: paymentMethod || 'cash',
+      createdAt: now,
+      date: txDate,
+    });
+    res.json(tx);
+  });
+
+  app.put("/api/transactions/:id", authenticateToken, (req: AuthRequest, res: Response) => {
+    const result = storage.updateTransaction(parseInt(req.params.id), req.body);
+    if (!result) return res.status(404).json({ error: "Операция не найдена" });
+    res.json(result);
+  });
+
+  app.delete("/api/transactions/:id", authenticateToken, requireAdmin, (req: AuthRequest, res: Response) => {
+    storage.deleteTransaction(parseInt(req.params.id));
+    res.json({ ok: true });
+  });
+
+  // Автозапись дохода при переводе заявки в 'готово'
+  // (вызывается из PUT /api/repairs/:id когда статус становится готово)
+  // — уже обрабатывается на фронтенде через кнопку в FinancePage
 }

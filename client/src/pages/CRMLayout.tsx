@@ -12,6 +12,7 @@ import { Button } from "@/components/ui/button";
 import OrdersPage from "@/pages/OrdersPage";
 import ClientsPage from "@/pages/ClientsPage";
 import WarehousePage from "@/pages/WarehousePage";
+import FinancePage from "@/pages/FinancePage";
 
 // ─── Звук уведомления ──────────────────────────────────────────────────────────
 function _playBeep(ctx: AudioContext, t: number, freq: number, dur: number) {
@@ -242,7 +243,7 @@ export default function CRMLayout() {
             <Route path="/crm/orders" component={OrdersPage} />
             <Route path="/crm/clients" component={ClientsPage} />
             <Route path="/crm/warehouse" component={WarehousePage} />
-            <Route path="/crm/finance" component={() => <ComingSoon title="Финансы" />} />
+            <Route path="/crm/finance" component={FinancePage} />
             <Route path="/crm/analytics" component={() => <ComingSoon title="Аналитика" />} />
             <Route path="/crm">
               {/* Редирект на заявки */}
