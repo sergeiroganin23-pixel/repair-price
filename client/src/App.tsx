@@ -11,37 +11,12 @@ import PriceListPage from "@/pages/PriceListPage";
 import SuppliersPage from "@/pages/SuppliersPage";
 import AdminPage from "@/pages/AdminPage";
 import RequestModal from "@/pages/RequestModal";
-import OrdersPage from "@/pages/OrdersPage";
-import ClientsPage from "@/pages/ClientsPage";
+import CRMLayout from "@/pages/CRMLayout";
 
 import {
-  LayoutList, Truck, ShieldCheck, LogOut, Sun, Moon, Bell, Users,
+  LayoutList, Truck, ShieldCheck, LogOut, Sun, Moon, LayoutDashboard,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
-
-// ─── Звуковой сигнал через Web Audio API ─────────────────────────────────────
-const _playBeep = (ctx: AudioContext, t: number, freq: number, dur: number) => {
-  const osc = ctx.createOscillator();
-  const g = ctx.createGain();
-  osc.connect(g);
-  g.connect(ctx.destination);
-  osc.frequency.value = freq;
-  osc.type = "sine";
-  g.gain.setValueAtTime(0, t);
-  g.gain.linearRampToValueAtTime(0.35, t + 0.01);
-  g.gain.linearRampToValueAtTime(0, t + dur);
-  osc.start(t);
-  osc.stop(t + dur + 0.01);
-};
-
-function playNotificationSound() {
-  try {
-    const ctx = new (window.AudioContext || (window as any).webkitAudioContext)();
-    const t = ctx.currentTime;
-    _playBeep(ctx, t, 880, 0.12);
-    _playBeep(ctx, t + 0.18, 1100, 0.12);
-  } catch {}
-}
 
 // ─── ThemeToggle ──────────────────────────────────────────────────────────────
 function ThemeToggle() {
@@ -87,12 +62,10 @@ function NavLink({
   href,
   icon,
   label,
-  badge,
 }: {
   href: string;
   icon: React.ReactNode;
   label: string;
-  badge?: number;
 }) {
   const [location] = useHashLocation();
   const isActive = location === href || (href === "/" && location === "");
@@ -107,12 +80,54 @@ function NavLink({
     >
       {icon}
       <span className="hidden sm:block">{label}</span>
-      {/* Зелёная мигающая точка */}
-      {badge != null && badge > 0 && (
+    </Link>
+  );
+}
+
+// ─── CRM Button — с зелёной точкой если есть новые заявки ────────────────────
+function CRMButton() {
+  const prevRef = useRef<number | null>(null);
+  const { data } = useQuery<{ count: number }>({
+    queryKey: ["/api/repairs/new-count"],
+    refetchInterval: 30_000,
+  });
+  const count = data?.count ?? 0;
+
+  // звук при появлении новых заявок даже когда мы на прайсе
+  useEffect(() => {
+    if (prevRef.current !== null && count > prevRef.current) {
+      try {
+        const ctx = new (window.AudioContext || (window as any).webkitAudioContext)();
+        const t = ctx.currentTime;
+        const play = (freq: number, when: number, dur: number) => {
+          const osc = ctx.createOscillator();
+          const g = ctx.createGain();
+          osc.connect(g); g.connect(ctx.destination);
+          osc.frequency.value = freq; osc.type = "sine";
+          g.gain.setValueAtTime(0, when);
+          g.gain.linearRampToValueAtTime(0.35, when + 0.01);
+          g.gain.linearRampToValueAtTime(0, when + dur);
+          osc.start(when); osc.stop(when + dur + 0.01);
+        };
+        play(880, t, 0.12);
+        play(1100, t + 0.18, 0.12);
+      } catch {}
+    }
+    prevRef.current = count;
+  }, [count]);
+
+  return (
+    <Link
+      href="/crm"
+      className="relative flex items-center gap-2 px-3 py-2 rounded-lg text-sm font-medium transition-colors text-muted-foreground hover:text-foreground hover:bg-muted"
+    >
+      <LayoutDashboard className="w-4 h-4" />
+      <span className="hidden sm:block">CRM</span>
+      {count > 0 && (
         <span className="absolute -top-1 -right-1 flex h-4 w-4 items-center justify-center">
           <span className="animate-ping absolute inline-flex h-3 w-3 rounded-full bg-green-400 opacity-75" />
           <span className="relative inline-flex rounded-full h-3 w-3 bg-green-500 items-center justify-center text-white text-[8px] font-bold leading-none">
-            {badge > 9 ? "9+" : badge}
+            {count > 9 ? "9+" : count}
           </span>
         </span>
       )}
@@ -120,36 +135,10 @@ function NavLink({
   );
 }
 
-// ─── Notification badge hook ──────────────────────────────────────────────────
-function useNewOrdersCount() {
-  const prevCountRef = useRef<number | null>(null);
-  const [location] = useHashLocation();
-
-  const { data } = useQuery<{ count: number }>({
-    queryKey: ["/api/repairs/new-count"],
-    refetchInterval: 30_000,
-  });
-
-  const count = data?.count ?? 0;
-
-  useEffect(() => {
-    if (prevCountRef.current !== null && count > prevCountRef.current) {
-      // Появились новые заявки — воспроизводим звук
-      playNotificationSound();
-    }
-    prevCountRef.current = count;
-  }, [count]);
-
-  // При открытии страницы заявок не скрываем точку — она исчезнет когда
-  // мастер поменяет статусы (новых станет 0)
-  return count;
-}
-
-// ─── Layout ───────────────────────────────────────────────────────────────────
+// ─── Layout (прайс-лист) ──────────────────────────────────────────────────────
 function Layout({ children }: { children: React.ReactNode }) {
   const { user, logout, isAdmin } = useAuth();
   const [requestOpen, setRequestOpen] = useState(false);
-  const newOrdersCount = useNewOrdersCount();
 
   return (
     <div className="min-h-screen flex flex-col">
@@ -162,13 +151,7 @@ function Layout({ children }: { children: React.ReactNode }) {
           <nav className="hidden md:flex items-center gap-1 flex-1 px-4">
             <NavLink href="/" icon={<LayoutList className="w-4 h-4" />} label="Прайс-лист" />
             <NavLink href="/suppliers" icon={<Truck className="w-4 h-4" />} label="Поставщики" />
-            <NavLink
-              href="/orders"
-              icon={<Bell className="w-4 h-4" />}
-              label="Заявки"
-              badge={newOrdersCount}
-            />
-            <NavLink href="/clients" icon={<Users className="w-4 h-4" />} label="Клиенты" />
+            <CRMButton />
             {isAdmin && (
               <NavLink href="/admin" icon={<ShieldCheck className="w-4 h-4" />} label="Админ-панель" />
             )}
@@ -194,13 +177,7 @@ function Layout({ children }: { children: React.ReactNode }) {
       <div className="md:hidden border-b border-border bg-background px-4 py-2 flex gap-1">
         <NavLink href="/" icon={<LayoutList className="w-4 h-4" />} label="Прайс" />
         <NavLink href="/suppliers" icon={<Truck className="w-4 h-4" />} label="Партнёры" />
-        <NavLink
-          href="/orders"
-          icon={<Bell className="w-4 h-4" />}
-          label="Заявки"
-          badge={newOrdersCount}
-        />
-        <NavLink href="/clients" icon={<Users className="w-4 h-4" />} label="Клиенты" />
+        <CRMButton />
         {isAdmin && (
           <NavLink href="/admin" icon={<ShieldCheck className="w-4 h-4" />} label="Админ" />
         )}
@@ -211,9 +188,10 @@ function Layout({ children }: { children: React.ReactNode }) {
         <Switch>
           <Route path="/" component={() => <PriceListPage onRequestOpen={() => setRequestOpen(true)} />} />
           <Route path="/suppliers" component={SuppliersPage} />
-          <Route path="/orders" component={OrdersPage} />
-          <Route path="/clients" component={ClientsPage} />
           {isAdmin && <Route path="/admin" component={AdminPage} />}
+          {/* CRM — полноэкранный раздел */}
+          <Route path="/crm/:rest*" component={CRMLayout} />
+          <Route path="/crm" component={CRMLayout} />
           <Route>
             <div className="text-center py-20 text-muted-foreground">Страница не найдена</div>
           </Route>
