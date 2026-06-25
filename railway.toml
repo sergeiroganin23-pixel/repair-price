@@ -2,6 +2,9 @@
 builder = "nixpacks"
 buildCommand = "npm run build"
 
+[build.nixpacksPlan.phases.setup]
+nixPkgs = ["python3", "nodePackages.node-gyp"]
+
 [deploy]
 startCommand = "node dist/index.cjs"
 healthcheckPath = "/api/categories"
