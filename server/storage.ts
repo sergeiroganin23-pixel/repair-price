@@ -3,6 +3,7 @@ import Database from "better-sqlite3";
 import { eq, desc } from "drizzle-orm";
 import {
   users, categories, subcategories, deviceModels, services, suppliers, changeRequests, repairs, sessions, clients,
+  parts, partMovements,
   type User, type InsertUser,
   type Category, type InsertCategory,
   type Subcategory, type InsertSubcategory,
@@ -13,6 +14,8 @@ import {
   type Repair, type InsertRepair,
   type Client, type InsertClient,
   type Session,
+  type Part, type InsertPart,
+  type PartMovement, type InsertPartMovement,
 } from "@shared/schema";
 import bcrypt from "bcryptjs";
 
@@ -139,6 +142,30 @@ sqlite.exec(`
     status TEXT NOT NULL DEFAULT 'новая',
     called INTEGER NOT NULL DEFAULT 0,
     assigned_to INTEGER,
+    created_at TEXT NOT NULL
+  );
+  CREATE TABLE IF NOT EXISTS parts (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    name TEXT NOT NULL,
+    sku TEXT,
+    category TEXT,
+    quantity INTEGER NOT NULL DEFAULT 0,
+    min_quantity INTEGER DEFAULT 1,
+    buy_price REAL,
+    sell_price REAL,
+    supplier_id INTEGER,
+    notes TEXT,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+  );
+  CREATE TABLE IF NOT EXISTS part_movements (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    part_id INTEGER NOT NULL,
+    type TEXT NOT NULL,
+    quantity INTEGER NOT NULL,
+    price REAL,
+    repair_id INTEGER,
+    comment TEXT,
     created_at TEXT NOT NULL
   );
 `);
@@ -309,6 +336,16 @@ export interface IStorage {
   orderExists(messageId: string): boolean;
   updateOrderStatus(id: number, status: string): Repair | undefined;
   updateOrderCalled(id: number, called: boolean): Repair | undefined;
+
+  // Parts
+  getParts(): Part[];
+  getPartById(id: number): Part | undefined;
+  createPart(data: InsertPart): Part;
+  updatePart(id: number, data: Partial<InsertPart>): Part | undefined;
+  deletePart(id: number): void;
+  adjustPartQuantity(id: number, delta: number): Part | undefined;
+  getMovementsByPart(partId: number): PartMovement[];
+  createMovement(data: InsertPartMovement): PartMovement;
 }
 
 export class SQLiteStorage implements IStorage {
@@ -494,6 +531,43 @@ export class SQLiteStorage implements IStorage {
   }
   updateOrderCalled(id: number, called: boolean) {
     return this.updateRepair(id, { called });
+  }
+
+  // ─── Parts ────────────────────────────────────────────────────────────────────────
+  getParts() {
+    return db.select().from(parts).orderBy(desc(parts.createdAt)).all();
+  }
+  getPartById(id: number) {
+    return db.select().from(parts).where(eq(parts.id, id)).get();
+  }
+  createPart(data: InsertPart) {
+    return db.insert(parts).values(data).returning().get();
+  }
+  updatePart(id: number, data: Partial<InsertPart>) {
+    return db.update(parts)
+      .set({ ...data, updatedAt: new Date().toISOString() })
+      .where(eq(parts.id, id))
+      .returning().get();
+  }
+  deletePart(id: number) {
+    db.delete(parts).where(eq(parts.id, id)).run();
+  }
+  adjustPartQuantity(id: number, delta: number) {
+    const part = this.getPartById(id);
+    if (!part) return undefined;
+    const newQty = Math.max(0, part.quantity + delta);
+    return this.updatePart(id, { quantity: newQty });
+  }
+
+  // ─── Part Movements ────────────────────────────────────────────────────────────────
+  getMovementsByPart(partId: number) {
+    return db.select().from(partMovements)
+      .where(eq(partMovements.partId, partId))
+      .orderBy(desc(partMovements.createdAt))
+      .all();
+  }
+  createMovement(data: InsertPartMovement) {
+    return db.insert(partMovements).values(data).returning().get();
   }
 }
 

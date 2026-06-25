@@ -444,4 +444,70 @@ export function registerRoutes(httpServer: Server, app: Express) {
     storage.deleteClient(parseInt(req.params.id));
     res.json({ ok: true });
   });
+
+  // ─── Parts (Склад запчастей) ──────────────────────────────────────────────────
+  app.get("/api/parts", authenticateToken, (_req: AuthRequest, res: Response) => {
+    res.json(storage.getParts());
+  });
+
+  app.get("/api/parts/:id", authenticateToken, (req: AuthRequest, res: Response) => {
+    const part = storage.getPartById(parseInt(req.params.id));
+    if (!part) return res.status(404).json({ error: "Запчасть не найдена" });
+    res.json(part);
+  });
+
+  app.post("/api/parts", authenticateToken, (req: AuthRequest, res: Response) => {
+    const { name, sku, category, quantity, minQuantity, buyPrice, sellPrice, supplierId, notes } = req.body;
+    if (!name) return res.status(400).json({ error: "Название обязательно" });
+    const now = new Date().toISOString();
+    const part = storage.createPart({
+      name, sku: sku || null, category: category || null,
+      quantity: quantity ?? 0, minQuantity: minQuantity ?? 1,
+      buyPrice: buyPrice ?? null, sellPrice: sellPrice ?? null,
+      supplierId: supplierId ?? null, notes: notes || null,
+      createdAt: now, updatedAt: now,
+    });
+    res.json(part);
+  });
+
+  app.put("/api/parts/:id", authenticateToken, (req: AuthRequest, res: Response) => {
+    const result = storage.updatePart(parseInt(req.params.id), req.body);
+    if (!result) return res.status(404).json({ error: "Запчасть не найдена" });
+    res.json(result);
+  });
+
+  app.delete("/api/parts/:id", authenticateToken, requireAdmin, (req: AuthRequest, res: Response) => {
+    storage.deletePart(parseInt(req.params.id));
+    res.json({ ok: true });
+  });
+
+  // ─── Part Movements (Приход/Расход) ─────────────────────────────────────────────
+  app.get("/api/parts/:id/movements", authenticateToken, (req: AuthRequest, res: Response) => {
+    res.json(storage.getMovementsByPart(parseInt(req.params.id)));
+  });
+
+  // POST /api/parts/:id/in — приход
+  app.post("/api/parts/:id/in", authenticateToken, (req: AuthRequest, res: Response) => {
+    const partId = parseInt(req.params.id);
+    const { quantity, price, comment } = req.body;
+    if (!quantity || quantity <= 0) return res.status(400).json({ error: "Количество должно быть > 0" });
+    const part = storage.getPartById(partId);
+    if (!part) return res.status(404).json({ error: "Запчасть не найдена" });
+    storage.createMovement({ partId, type: "in", quantity, price: price ?? null, repairId: null, comment: comment || null, createdAt: new Date().toISOString() });
+    const updated = storage.adjustPartQuantity(partId, quantity);
+    res.json(updated);
+  });
+
+  // POST /api/parts/:id/out — расход
+  app.post("/api/parts/:id/out", authenticateToken, (req: AuthRequest, res: Response) => {
+    const partId = parseInt(req.params.id);
+    const { quantity, repairId, comment } = req.body;
+    if (!quantity || quantity <= 0) return res.status(400).json({ error: "Количество должно быть > 0" });
+    const part = storage.getPartById(partId);
+    if (!part) return res.status(404).json({ error: "Запчасть не найдена" });
+    if (part.quantity < quantity) return res.status(400).json({ error: `Недостаточно на складе: ${part.quantity} шт.` });
+    storage.createMovement({ partId, type: "out", quantity, price: null, repairId: repairId ?? null, comment: comment || null, createdAt: new Date().toISOString() });
+    const updated = storage.adjustPartQuantity(partId, -quantity);
+    res.json(updated);
+  });
 }

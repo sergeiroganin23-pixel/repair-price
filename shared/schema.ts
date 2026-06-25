@@ -146,6 +146,42 @@ export const insertOrderSchema = insertRepairSchema;
 export type InsertOrder = InsertRepair;
 export type Order = Repair;
 
+// ─── Parts (Склад запчастей) ─────────────────────────────────────────────────
+export const parts = sqliteTable("parts", {
+  id: integer("id").primaryKey({ autoIncrement: true }),
+  name: text("name").notNull(),                  // название запчасти
+  sku: text("sku"),                              // артикул
+  category: text("category"),                   // категория: дисплеи, аккумуляторы...
+  quantity: integer("quantity").notNull().default(0), // остаток на складе
+  minQuantity: integer("min_quantity").default(1),    // минимальный остаток (для уведомления)
+  buyPrice: real("buy_price"),                  // цена закупки
+  sellPrice: real("sell_price"),                // цена продажи/установки
+  supplierId: integer("supplier_id"),           // поставщик
+  notes: text("notes"),
+  createdAt: text("created_at").notNull(),
+  updatedAt: text("updated_at").notNull(),
+});
+
+export const insertPartSchema = createInsertSchema(parts).omit({ id: true });
+export type InsertPart = z.infer<typeof insertPartSchema>;
+export type Part = typeof parts.$inferSelect;
+
+// ─── Part Movements (Приход/Расход) ───────────────────────────────────────────
+export const partMovements = sqliteTable("part_movements", {
+  id: integer("id").primaryKey({ autoIncrement: true }),
+  partId: integer("part_id").notNull(),
+  type: text("type").notNull(),    // "in" | "out"
+  quantity: integer("quantity").notNull(),
+  price: real("price"),            // цена за единицу при этом движении
+  repairId: integer("repair_id"), // если расход — привязан к заявке
+  comment: text("comment"),
+  createdAt: text("created_at").notNull(),
+});
+
+export const insertPartMovementSchema = createInsertSchema(partMovements).omit({ id: true });
+export type InsertPartMovement = z.infer<typeof insertPartMovementSchema>;
+export type PartMovement = typeof partMovements.$inferSelect;
+
 // ─── Change Requests ──────────────────────────────────────────────────────────
 export const changeRequests = sqliteTable("change_requests", {
   id: integer("id").primaryKey({ autoIncrement: true }),
