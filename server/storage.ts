@@ -5,6 +5,7 @@ import {
   users, categories, subcategories, deviceModels, services, suppliers, changeRequests, repairs, sessions, clients,
   parts, partMovements, transactions, salaries,
   repairStatuses, deviceBrands, deviceModelsRepair, repairIssues,
+  partCategories, cashboxes,
   type User, type InsertUser,
   type Category, type InsertCategory,
   type Subcategory, type InsertSubcategory,
@@ -23,6 +24,8 @@ import {
   type DeviceBrand, type InsertDeviceBrand,
   type DeviceModelRepair, type InsertDeviceModelRepair,
   type RepairIssue, type InsertRepairIssue,
+  type PartCategory, type InsertPartCategory,
+  type Cashbox, type InsertCashbox,
 } from "@shared/schema";
 import bcrypt from "bcryptjs";
 
@@ -225,6 +228,18 @@ sqlite.exec(`
     name TEXT NOT NULL,
     sort_order INTEGER NOT NULL DEFAULT 0
   );
+  CREATE TABLE IF NOT EXISTS part_categories (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    name TEXT NOT NULL,
+    sort_order INTEGER NOT NULL DEFAULT 0
+  );
+  CREATE TABLE IF NOT EXISTS cashboxes (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    name TEXT NOT NULL,
+    type TEXT NOT NULL DEFAULT 'cash',
+    is_active INTEGER NOT NULL DEFAULT 1,
+    sort_order INTEGER NOT NULL DEFAULT 0
+  );
 `);
 
 // ─── Фикс старой базы: пересоздать sessions если нет колонки id или UNIQUE constraint ─────
@@ -389,6 +404,24 @@ function seedIfEmpty() {
       "Зависает / тормозит", "Не видит SIM", "Не работает сенсор"
     ];
     issues.forEach((name, i) => db.insert(repairIssues).values({ name, sortOrder: i + 1 }).run());
+  }
+
+  // Seed part categories
+  const existingPartCats = db.select().from(partCategories).all();
+  if (existingPartCats.length === 0) {
+    const cats = [
+      "Дисплеи", "Аккумуляторы", "Задние крышки", "Разъёмы",
+      "Кнопки", "Камеры", "Динамики", "Микрофоны", "Платы", "Другое",
+    ];
+    cats.forEach((name, i) => db.insert(partCategories).values({ name, sortOrder: i + 1 }).run());
+  }
+
+  // Seed cashboxes
+  const existingCashboxes = db.select().from(cashboxes).all();
+  if (existingCashboxes.length === 0) {
+    db.insert(cashboxes).values({ name: "Наличные", type: "cash", isActive: true, sortOrder: 1 }).run();
+    db.insert(cashboxes).values({ name: "Безналичные (терминал)", type: "card", isActive: true, sortOrder: 2 }).run();
+    db.insert(cashboxes).values({ name: "Перевод", type: "transfer", isActive: true, sortOrder: 3 }).run();
   }
 }
 
@@ -828,6 +861,36 @@ export class SQLiteStorage implements IStorage {
   }
   deleteRepairIssue(id: number) {
     db.delete(repairIssues).where(eq(repairIssues.id, id)).run();
+  }
+
+  // ─── Part Categories (категории склада) ────────────────────────────────────────────
+  getPartCategories() {
+    return db.select().from(partCategories).orderBy(partCategories.sortOrder).all();
+  }
+  createPartCategory(data: InsertPartCategory) {
+    return db.insert(partCategories).values(data).returning().get();
+  }
+  updatePartCategory(id: number, data: Partial<InsertPartCategory>) {
+    return db.update(partCategories).set(data).where(eq(partCategories.id, id)).returning().get();
+  }
+  deletePartCategory(id: number) {
+    db.delete(partCategories).where(eq(partCategories.id, id)).run();
+  }
+
+  // ─── Cashboxes (кассы) ──────────────────────────────────────────────────────────
+  getCashboxes(activeOnly = false) {
+    let all = db.select().from(cashboxes).orderBy(cashboxes.sortOrder).all();
+    if (activeOnly) all = all.filter(c => c.isActive);
+    return all;
+  }
+  createCashbox(data: InsertCashbox) {
+    return db.insert(cashboxes).values(data).returning().get();
+  }
+  updateCashbox(id: number, data: Partial<InsertCashbox>) {
+    return db.update(cashboxes).set(data).where(eq(cashboxes.id, id)).returning().get();
+  }
+  deleteCashbox(id: number) {
+    db.delete(cashboxes).where(eq(cashboxes.id, id)).run();
   }
 }
 

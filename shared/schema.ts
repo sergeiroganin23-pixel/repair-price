@@ -291,3 +291,25 @@ export const repairIssues = sqliteTable("repair_issues", {
 export const insertRepairIssueSchema = createInsertSchema(repairIssues).omit({ id: true });
 export type InsertRepairIssue = z.infer<typeof insertRepairIssueSchema>;
 export type RepairIssue = typeof repairIssues.$inferSelect;
+
+// ─── Part Categories (управляемые категории склада) ───────────────────────────
+export const partCategories = sqliteTable("part_categories", {
+  id: integer("id").primaryKey({ autoIncrement: true }),
+  name: text("name").notNull(),
+  sortOrder: integer("sort_order").notNull().default(0),
+});
+export const insertPartCategorySchema = createInsertSchema(partCategories).omit({ id: true });
+export type InsertPartCategory = z.infer<typeof insertPartCategorySchema>;
+export type PartCategory = typeof partCategories.$inferSelect;
+
+// ─── Cashboxes (кассы) ────────────────────────────────────────────────────────
+export const cashboxes = sqliteTable("cashboxes", {
+  id: integer("id").primaryKey({ autoIncrement: true }),
+  name: text("name").notNull(),                              // "Наличные", "Терминал"
+  type: text("type").notNull().default("cash"),             // cash | card | transfer | custom
+  isActive: integer("is_active", { mode: "boolean" }).notNull().default(true),
+  sortOrder: integer("sort_order").notNull().default(0),
+});
+export const insertCashboxSchema = createInsertSchema(cashboxes).omit({ id: true });
+export type InsertCashbox = z.infer<typeof insertCashboxSchema>;
+export type Cashbox = typeof cashboxes.$inferSelect;

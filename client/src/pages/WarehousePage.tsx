@@ -14,12 +14,7 @@ import {
   Package, Plus, Pencil, Trash2, ArrowDownCircle, ArrowUpCircle,
   Search, AlertTriangle, History, X,
 } from "lucide-react";
-import type { Part, PartMovement } from "@shared/schema";
-
-const PART_CATEGORIES = [
-  "Дисплеи", "Аккумуляторы", "Задние крышки", "Разъёмы",
-  "Кнопки", "Камеры", "Динамики", "Микрофоны", "Платы", "Другое",
-];
+import type { Part, PartMovement, PartCategory } from "@shared/schema";
 
 function formatDate(iso: string) {
   try {
@@ -33,6 +28,10 @@ function formatDate(iso: string) {
 // ─── Форма добавления/редактирования запчасти ─────────────────────────────────
 function PartForm({ part, onClose }: { part?: Part; onClose: () => void }) {
   const { toast } = useToast();
+  const { data: partCats = [] } = useQuery<PartCategory[]>({
+    queryKey: ["/api/part-categories"],
+    queryFn: () => apiRequest("GET", "/api/part-categories").then(r => r.json()),
+  });
   const [form, setForm] = useState({
     name: part?.name || "",
     sku: part?.sku || "",
@@ -81,7 +80,7 @@ function PartForm({ part, onClose }: { part?: Part; onClose: () => void }) {
           <Select value={form.category} onValueChange={v => set("category", v)}>
             <SelectTrigger><SelectValue placeholder="Выберите..." /></SelectTrigger>
             <SelectContent>
-              {PART_CATEGORIES.map(c => <SelectItem key={c} value={c}>{c}</SelectItem>)}
+              {partCats.map(c => <SelectItem key={c.id} value={c.name}>{c.name}</SelectItem>)}
             </SelectContent>
           </Select>
         </div>
@@ -401,6 +400,11 @@ export default function WarehousePage() {
     queryKey: ["/api/parts"],
   });
 
+  const { data: partCats = [] } = useQuery<PartCategory[]>({
+    queryKey: ["/api/part-categories"],
+    queryFn: () => apiRequest("GET", "/api/part-categories").then(r => r.json()),
+  });
+
   const deleteMutation = useMutation({
     mutationFn: (id: number) => apiRequest("DELETE", `/api/parts/${id}`),
     onSuccess: () => {
@@ -425,8 +429,6 @@ export default function WarehousePage() {
 
   const lowCount = parts.filter(p => p.quantity <= (p.minQuantity ?? 1) && p.quantity > 0).length;
   const emptyCount = parts.filter(p => p.quantity === 0).length;
-
-  const categories = Array.from(new Set(parts.map(p => p.category).filter(Boolean)));
 
   if (isLoading) return (
     <div className="max-w-5xl mx-auto px-4 py-8 space-y-4">
@@ -469,12 +471,12 @@ export default function WarehousePage() {
         </div>
 
         <Select value={filterCategory} onValueChange={setFilterCategory}>
-          <SelectTrigger className="w-40">
+          <SelectTrigger className="w-44">
             <SelectValue placeholder="Категория" />
           </SelectTrigger>
           <SelectContent>
             <SelectItem value="all">Все категории</SelectItem>
-            {categories.map(c => <SelectItem key={c!} value={c!}>{c}</SelectItem>)}
+            {partCats.map(c => <SelectItem key={c.id} value={c.name}>{c.name}</SelectItem>)}
           </SelectContent>
         </Select>
 

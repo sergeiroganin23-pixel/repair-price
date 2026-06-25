@@ -659,7 +659,7 @@ export function registerRoutes(httpServer: Server, app: Express) {
     res.json({ ok: true });
   });
 
-  // ─── Repair Issues ────────────────────────────────────────────────────────────
+  // ─── Repair Issues ────────────────────────────────────────────────────────────────────────────
   app.get("/api/repair-issues", authenticateToken, (req: AuthRequest, res: Response) => {
     res.json(storage.getRepairIssues());
   });
@@ -675,6 +675,45 @@ export function registerRoutes(httpServer: Server, app: Express) {
   });
   app.delete("/api/repair-issues/:id", authenticateToken, requireAdmin, (req: AuthRequest, res: Response) => {
     storage.deleteRepairIssue(parseInt(req.params.id));
+    res.json({ ok: true });
+  });
+
+  // ─── Part Categories ────────────────────────────────────────────────────────────────────────
+  app.get("/api/part-categories", authenticateToken, (req: AuthRequest, res: Response) => {
+    res.json(storage.getPartCategories());
+  });
+  app.post("/api/part-categories", authenticateToken, requireAdmin, (req: AuthRequest, res: Response) => {
+    const { name, sortOrder } = req.body;
+    if (!name) return res.status(400).json({ error: "Название обязательно" });
+    res.json(storage.createPartCategory({ name, sortOrder: sortOrder ?? 0 }));
+  });
+  app.put("/api/part-categories/:id", authenticateToken, requireAdmin, (req: AuthRequest, res: Response) => {
+    const result = storage.updatePartCategory(parseInt(req.params.id), req.body);
+    if (!result) return res.status(404).json({ error: "Не найдено" });
+    res.json(result);
+  });
+  app.delete("/api/part-categories/:id", authenticateToken, requireAdmin, (req: AuthRequest, res: Response) => {
+    storage.deletePartCategory(parseInt(req.params.id));
+    res.json({ ok: true });
+  });
+
+  // ─── Cashboxes ──────────────────────────────────────────────────────────────────────────────
+  app.get("/api/cashboxes", authenticateToken, (req: AuthRequest, res: Response) => {
+    const activeOnly = req.query.active === "true";
+    res.json(storage.getCashboxes(activeOnly));
+  });
+  app.post("/api/cashboxes", authenticateToken, requireAdmin, (req: AuthRequest, res: Response) => {
+    const { name, type, isActive, sortOrder } = req.body;
+    if (!name) return res.status(400).json({ error: "Название обязательно" });
+    res.json(storage.createCashbox({ name, type: type || "cash", isActive: isActive !== false, sortOrder: sortOrder ?? 0 }));
+  });
+  app.put("/api/cashboxes/:id", authenticateToken, requireAdmin, (req: AuthRequest, res: Response) => {
+    const result = storage.updateCashbox(parseInt(req.params.id), req.body);
+    if (!result) return res.status(404).json({ error: "Не найдено" });
+    res.json(result);
+  });
+  app.delete("/api/cashboxes/:id", authenticateToken, requireAdmin, (req: AuthRequest, res: Response) => {
+    storage.deleteCashbox(parseInt(req.params.id));
     res.json({ ok: true });
   });
 }

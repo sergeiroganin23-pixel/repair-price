@@ -14,15 +14,11 @@ import {
   TrendingUp, TrendingDown, Wallet, Plus, Pencil, Trash2,
   ArrowUpRight, ArrowDownRight,
 } from "lucide-react";
-import type { Transaction } from "@shared/schema";
+import type { Transaction, Cashbox } from "@shared/schema";
 
 // ─── Категории ────────────────────────────────────────────────────────────────
 const INCOME_CATEGORIES = ["Ремонт", "Продажа запчастей", "Диагностика", "Прочий доход"];
 const EXPENSE_CATEGORIES = ["Закупка запчастей", "Аренда", "Зарплата", "Коммунальные", "Реклама", "Оборудование", "Прочий расход"];
-
-const PAYMENT_LABELS: Record<string, string> = {
-  cash: "Наличные", card: "Карта", transfer: "Перевод",
-};
 
 function formatDate(date: string) {
   try {
@@ -46,18 +42,21 @@ function TransactionForm({
   tx,
   defaultType,
   onClose,
+  cashboxes: cashboxList = [],
 }: {
   tx?: Transaction;
   defaultType?: "income" | "expense";
   onClose: () => void;
+  cashboxes?: Cashbox[];
 }) {
   const { toast } = useToast();
+  // paymentMethod теперь хранит cashboxId как строку (или имя для совместимости)
   const [form, setForm] = useState({
     type: tx?.type || defaultType || "income",
     amount: tx?.amount?.toString() || "",
     category: tx?.category || "",
     description: tx?.description || "",
-    paymentMethod: tx?.paymentMethod || "cash",
+    paymentMethod: tx?.paymentMethod || "",
     date: tx?.date || today(),
   });
   const set = (k: string, v: string) => setForm(p => ({ ...p, [k]: v }));
@@ -137,13 +136,20 @@ function TransactionForm({
       </div>
 
       <div className="space-y-1.5">
-        <Label>Способ оплаты</Label>
+        <Label>Касса / Способ оплаты</Label>
         <Select value={form.paymentMethod} onValueChange={v => set("paymentMethod", v)}>
-          <SelectTrigger><SelectValue /></SelectTrigger>
+          <SelectTrigger><SelectValue placeholder="Выберите кассу..." /></SelectTrigger>
           <SelectContent>
-            <SelectItem value="cash">Наличные</SelectItem>
-            <SelectItem value="card">Карта</SelectItem>
-            <SelectItem value="transfer">Перевод</SelectItem>
+            {cashboxList.length > 0
+              ? cashboxList.filter(c => c.isActive).map(c => (
+                  <SelectItem key={c.id} value={c.name}>{c.name}</SelectItem>
+                ))
+              : <>
+                  <SelectItem value="Наличные">Наличные</SelectItem>
+                  <SelectItem value="Карта">Карта</SelectItem>
+                  <SelectItem value="Перевод">Перевод</SelectItem>
+                </>
+            }
           </SelectContent>
         </Select>
       </div>
@@ -194,7 +200,7 @@ function TxRow({
       <div className="flex-1 min-w-0">
         <div className="flex items-center gap-2 flex-wrap">
           <span className="text-sm font-medium">{tx.category}</span>
-          <Badge variant="outline" className="text-xs">{PAYMENT_LABELS[tx.paymentMethod || "cash"]}</Badge>
+          {tx.paymentMethod && <Badge variant="outline" className="text-xs">{tx.paymentMethod}</Badge>}
         </div>
         {tx.description && (
           <p className="text-xs text-muted-foreground truncate">{tx.description}</p>
@@ -247,6 +253,11 @@ export default function FinancePage() {
     if (period === "month") return { from: firstOfMonth(), to: t };
     return { from: undefined, to: undefined };
   }, [period]);
+
+  const { data: cashboxList = [] } = useQuery<Cashbox[]>({
+    queryKey: ["/api/cashboxes"],
+    queryFn: () => apiRequest("GET", "/api/cashboxes?active=true").then(r => r.json()),
+  });
 
   const { data: txList = [], isLoading } = useQuery<Transaction[]>({
     queryKey: ["/api/transactions", from, to],
@@ -438,7 +449,7 @@ export default function FinancePage() {
             <DialogTitle>{createType === "income" ? "Добавить доход" : "Добавить расход"}</DialogTitle>
           </DialogHeader>
           {createType && (
-            <TransactionForm defaultType={createType} onClose={() => setCreateType(null)} />
+            <TransactionForm defaultType={createType} onClose={() => setCreateType(null)} cashboxes={cashboxList} />
           )}
         </DialogContent>
       </Dialog>
@@ -446,7 +457,7 @@ export default function FinancePage() {
       <Dialog open={!!editTx} onOpenChange={v => !v && setEditTx(null)}>
         <DialogContent className="max-w-md">
           <DialogHeader><DialogTitle>Редактировать операцию</DialogTitle></DialogHeader>
-          {editTx && <TransactionForm tx={editTx} onClose={() => setEditTx(null)} />}
+          {editTx && <TransactionForm tx={editTx} onClose={() => setEditTx(null)} cashboxes={cashboxList} />}
         </DialogContent>
       </Dialog>
     </div>
