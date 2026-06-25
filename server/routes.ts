@@ -697,6 +697,56 @@ export function registerRoutes(httpServer: Server, app: Express) {
     res.json({ ok: true });
   });
 
+
+  // ─── Repair Parts ────────────────────────────────────────────────────────────
+  app.get("/api/repairs/:id/parts", authenticateToken, (req: AuthRequest, res: Response) => {
+    res.json(storage.getRepairParts(parseInt(req.params.id)));
+  });
+
+  app.post("/api/repairs/:id/parts", authenticateToken, (req: AuthRequest, res: Response) => {
+    const repairId = parseInt(req.params.id);
+    const { type, partId, name, quantity, price } = req.body;
+    if (!name) return res.status(400).json({ error: "Название обязательно" });
+    const now = new Date().toISOString();
+    const entry = storage.addRepairPart({
+      repairId,
+      type: type || "part",
+      partId: partId ? parseInt(partId) : null,
+      name,
+      quantity: quantity || 1,
+      price: price || 0,
+      createdAt: now,
+    });
+    // Если тип "part" и partId указан — списываем со склада
+    if (type === "part" && partId) {
+      try {
+        storage.createPartMovement({
+          partId: parseInt(partId),
+          type: "out",
+          quantity: quantity || 1,
+          price: price || null,
+          repairId,
+          comment: `Заявка #${repairId}`,
+          createdAt: now,
+        });
+      } catch (e) {
+        console.error("[repair_parts] movement error:", e);
+      }
+    }
+    res.json(entry);
+  });
+
+  app.delete("/api/repairs/:repairId/parts/:id", authenticateToken, (req: AuthRequest, res: Response) => {
+    storage.deleteRepairPart(parseInt(req.params.id));
+    res.json({ ok: true });
+  });
+
+  app.put("/api/repairs/:repairId/parts/:id", authenticateToken, (req: AuthRequest, res: Response) => {
+    const result = storage.updateRepairPart(parseInt(req.params.id), req.body);
+    if (!result) return res.status(404).json({ error: "Не найдено" });
+    res.json(result);
+  });
+
   // ─── Cashboxes ──────────────────────────────────────────────────────────────────────────────
   app.get("/api/cashboxes", authenticateToken, (req: AuthRequest, res: Response) => {
     const activeOnly = req.query.active === "true";

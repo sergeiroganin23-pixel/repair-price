@@ -5,7 +5,7 @@ import {
   users, categories, subcategories, deviceModels, services, suppliers, changeRequests, repairs, sessions, clients,
   parts, partMovements, transactions, salaries,
   repairStatuses, deviceBrands, deviceModelsRepair, repairIssues,
-  partCategories, cashboxes,
+  partCategories, cashboxes, repairParts,
   type User, type InsertUser,
   type Category, type InsertCategory,
   type Subcategory, type InsertSubcategory,
@@ -26,6 +26,7 @@ import {
   type RepairIssue, type InsertRepairIssue,
   type PartCategory, type InsertPartCategory,
   type Cashbox, type InsertCashbox,
+  type RepairPart, type InsertRepairPart,
 } from "@shared/schema";
 import bcrypt from "bcryptjs";
 
@@ -239,6 +240,16 @@ sqlite.exec(`
     type TEXT NOT NULL DEFAULT 'cash',
     is_active INTEGER NOT NULL DEFAULT 1,
     sort_order INTEGER NOT NULL DEFAULT 0
+  );
+  CREATE TABLE IF NOT EXISTS repair_parts (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    repair_id INTEGER NOT NULL,
+    type TEXT NOT NULL DEFAULT 'part',
+    part_id INTEGER,
+    name TEXT NOT NULL,
+    quantity INTEGER NOT NULL DEFAULT 1,
+    price REAL NOT NULL DEFAULT 0,
+    created_at TEXT NOT NULL
   );
 `);
 
@@ -891,6 +902,20 @@ export class SQLiteStorage implements IStorage {
   }
   deleteCashbox(id: number) {
     db.delete(cashboxes).where(eq(cashboxes.id, id)).run();
+  }
+
+  // ─── Repair Parts (запчасти и работы в заявке) ───────────────────────────────
+  getRepairParts(repairId: number) {
+    return db.select().from(repairParts).where(eq(repairParts.repairId, repairId)).all();
+  }
+  addRepairPart(data: InsertRepairPart) {
+    return db.insert(repairParts).values(data).returning().get();
+  }
+  deleteRepairPart(id: number) {
+    db.delete(repairParts).where(eq(repairParts.id, id)).run();
+  }
+  updateRepairPart(id: number, data: Partial<InsertRepairPart>) {
+    return db.update(repairParts).set(data).where(eq(repairParts.id, id)).returning().get();
   }
 }
 

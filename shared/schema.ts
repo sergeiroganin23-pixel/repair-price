@@ -292,6 +292,24 @@ export const insertRepairIssueSchema = createInsertSchema(repairIssues).omit({ i
 export type InsertRepairIssue = z.infer<typeof insertRepairIssueSchema>;
 export type RepairIssue = typeof repairIssues.$inferSelect;
 
+
+// ─── Repair Parts (запчасти и работы в заявке) ──────────────────────────────
+export const repairParts = sqliteTable("repair_parts", {
+  id: integer("id").primaryKey({ autoIncrement: true }),
+  repairId: integer("repair_id").notNull(),
+  // Тип строки: запчасть со склада или ручная работа
+  type: text("type").notNull().default("part"), // "part" | "work"
+  // Если со склада — partId; если ручная — null
+  partId: integer("part_id"),
+  name: text("name").notNull(),        // название (скопировано с запчасти или введено вручную)
+  quantity: integer("quantity").notNull().default(1),
+  price: real("price").notNull().default(0),   // цена за единицу
+  createdAt: text("created_at").notNull(),
+});
+export const insertRepairPartSchema = createInsertSchema(repairParts).omit({ id: true });
+export type InsertRepairPart = z.infer<typeof insertRepairPartSchema>;
+export type RepairPart = typeof repairParts.$inferSelect;
+
 // ─── Part Categories (управляемые категории склада) ───────────────────────────
 export const partCategories = sqliteTable("part_categories", {
   id: integer("id").primaryKey({ autoIncrement: true }),
