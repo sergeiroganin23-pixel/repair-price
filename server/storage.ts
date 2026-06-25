@@ -163,9 +163,12 @@ seedIfEmpty();
 // ─── Storage Interface ────────────────────────────────────────────────────────
 export interface IStorage {
   // Auth
+  getAllUsers(): User[];
   getUserByUsername(username: string): User | undefined;
   getUserById(id: number): User | undefined;
   createUser(data: InsertUser): User;
+  updateUser(id: number, data: Partial<InsertUser>): User | undefined;
+  deleteUser(id: number): void;
 
   // Categories
   getCategories(): Category[];
@@ -200,6 +203,9 @@ export interface IStorage {
 }
 
 export class SQLiteStorage implements IStorage {
+  getAllUsers() {
+    return db.select().from(users).all();
+  }
   getUserByUsername(username: string) {
     return db.select().from(users).where(eq(users.username, username)).get();
   }
@@ -208,6 +214,12 @@ export class SQLiteStorage implements IStorage {
   }
   createUser(data: InsertUser) {
     return db.insert(users).values(data).returning().get();
+  }
+  updateUser(id: number, data: Partial<InsertUser>) {
+    return db.update(users).set(data).where(eq(users.id, id)).returning().get();
+  }
+  deleteUser(id: number) {
+    db.delete(users).where(eq(users.id, id)).run();
   }
 
   getCategories() {

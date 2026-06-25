@@ -24,7 +24,7 @@ import { apiRequest, queryClient } from "@/lib/queryClient";
 import type { Category, DeviceModel, Service, Supplier, ChangeRequest } from "@shared/schema";
 import {
   Plus, Pencil, Trash2, Loader2, Check, X, MessageSquare,
-  Smartphone, Wrench, Truck, Bell, UserPlus, ChevronDown,
+  Smartphone, Wrench, Truck, Bell, UserPlus, Users,
 } from "lucide-react";
 
 // ─── Request Status Badge ─────────────────────────────────────────────────
@@ -632,60 +632,210 @@ function SuppliersAdminTab() {
   );
 }
 
-// ─── Add User Tab ─────────────────────────────────────────────────────────
+// ─── Users Tab (список сотрудников + редактирование) ─────────────────────
+type UserRow = { id: number; username: string; role: string; displayName: string };
+
 function UsersTab() {
   const { toast } = useToast();
-  const [form, setForm] = useState({ username: "", password: "", displayName: "", role: "master" });
-  const [loading, setLoading] = useState(false);
 
-  async function handleCreate(e: React.FormEvent) {
-    e.preventDefault();
-    setLoading(true);
-    try {
-      const res = await apiRequest("POST", "/api/admin/users", form);
+  const [showCreate, setShowCreate] = useState(false);
+  const [editUser, setEditUser] = useState<UserRow | null>(null);
+  const [deleteId, setDeleteId] = useState<number | null>(null);
+
+  const [createForm, setCreateForm] = useState({ username: "", password: "", displayName: "", role: "master" });
+  const [editForm, setEditForm] = useState({ displayName: "", role: "master", password: "" });
+
+  const { data: users, isLoading } = useQuery<UserRow[]>({
+    queryKey: ["/api/admin/users"],
+    queryFn: async () => {
+      const res = await apiRequest("GET", "/api/admin/users");
+      if (!res.ok) throw new Error();
+      return res.json();
+    },
+  });
+
+  const createMutation = useMutation({
+    mutationFn: async () => {
+      const res = await apiRequest("POST", "/api/admin/users", createForm);
       const data = await res.json();
-      if (!res.ok) {
-        toast({ title: "Ошибка", description: data.error, variant: "destructive" });
-      } else {
-        toast({ title: "Пользователь создан", description: `Логин: ${data.username}` });
-        setForm({ username: "", password: "", displayName: "", role: "master" });
-      }
-    } finally {
-      setLoading(false);
-    }
+      if (!res.ok) throw new Error(data.error || "Ошибка");
+      return data;
+    },
+    onSuccess: (data) => {
+      queryClient.invalidateQueries({ queryKey: ["/api/admin/users"] });
+      setShowCreate(false);
+      setCreateForm({ username: "", password: "", displayName: "", role: "master" });
+      toast({ title: "Пользователь создан", description: `Логин: ${data.username}` });
+    },
+    onError: (e: Error) => toast({ title: "Ошибка", description: e.message, variant: "destructive" }),
+  });
+
+  const editMutation = useMutation({
+    mutationFn: async () => {
+      if (!editUser) return;
+      const body: Record<string, string> = { displayName: editForm.displayName, role: editForm.role };
+      if (editForm.password) body.password = editForm.password;
+      const res = await apiRequest("PUT", `/api/admin/users/${editUser.id}`, body);
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || "Ошибка");
+      return data;
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/admin/users"] });
+      setEditUser(null);
+      toast({ title: "Сотрудник обновлён" });
+    },
+    onError: (e: Error) => toast({ title: "Ошибка", description: e.message, variant: "destructive" }),
+  });
+
+  const deleteMutation = useMutation({
+    mutationFn: async (id: number) => {
+      const res = await apiRequest("DELETE", `/api/admin/users/${id}`);
+      if (!res.ok) { const data = await res.json(); throw new Error(data.error || "Ошибка"); }
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/admin/users"] });
+      setDeleteId(null);
+      toast({ title: "Сотрудник удалён" });
+    },
+    onError: (e: Error) => { setDeleteId(null); toast({ title: "Ошибка", description: e.message, variant: "destructive" }); },
+  });
+
+  function openEdit(u: UserRow) {
+    setEditUser(u);
+    setEditForm({ displayName: u.displayName, role: u.role, password: "" });
   }
 
+  const roleLabel = (role: string) => role === "admin" ? "Администратор" : "Мастер";
+  const roleColor = (role: string) => role === "admin"
+    ? "bg-primary/10 text-primary border-primary/20"
+    : "bg-muted text-muted-foreground border-border";
+
   return (
-    <div className="max-w-sm">
-      <p className="text-sm text-muted-foreground mb-4">Создать нового сотрудника или мастера</p>
-      <form onSubmit={handleCreate} className="space-y-3">
-        <div>
-          <Label>Имя для отображения</Label>
-          <Input value={form.displayName} onChange={e => setForm(f => ({...f, displayName: e.target.value}))} placeholder="Иван Иванов" className="mt-1" required />
-        </div>
-        <div>
-          <Label>Логин</Label>
-          <Input value={form.username} onChange={e => setForm(f => ({...f, username: e.target.value}))} placeholder="ivan" className="mt-1" required />
-        </div>
-        <div>
-          <Label>Пароль (минимум 6 символов)</Label>
-          <Input type="password" value={form.password} onChange={e => setForm(f => ({...f, password: e.target.value}))} placeholder="••••••••" className="mt-1" required minLength={6} />
-        </div>
-        <div>
-          <Label>Роль</Label>
-          <Select value={form.role} onValueChange={v => setForm(f => ({...f, role: v}))}>
-            <SelectTrigger className="mt-1"><SelectValue /></SelectTrigger>
-            <SelectContent>
-              <SelectItem value="master">Мастер</SelectItem>
-              <SelectItem value="admin">Администратор</SelectItem>
-            </SelectContent>
-          </Select>
-        </div>
-        <Button type="submit" className="w-full gap-2" disabled={loading || !form.username || !form.password || !form.displayName}>
-          {loading ? <Loader2 className="w-4 h-4 animate-spin" /> : <UserPlus className="w-4 h-4" />}
-          Создать пользователя
+    <div>
+      <div className="flex justify-between items-center mb-4">
+        <p className="text-sm text-muted-foreground">{users?.length || 0} сотрудников</p>
+        <Button size="sm" onClick={() => setShowCreate(true)} className="gap-1.5" data-testid="button-add-user">
+          <UserPlus className="w-4 h-4" /> Добавить
         </Button>
-      </form>
+      </div>
+
+      {isLoading ? (
+        <div className="space-y-2">{[1,2,3].map(i => <Skeleton key={i} className="h-14 w-full rounded-lg" />)}</div>
+      ) : (
+        <div className="space-y-2">
+          {users?.map(u => (
+            <div key={u.id} className="flex items-center justify-between bg-card border border-border rounded-lg px-4 py-3" data-testid={`row-user-${u.id}`}>
+              <div className="flex items-center gap-3">
+                <div className="w-9 h-9 rounded-full bg-primary/10 flex items-center justify-center shrink-0">
+                  <span className="text-sm font-semibold text-primary">{(u.displayName || u.username).charAt(0).toUpperCase()}</span>
+                </div>
+                <div>
+                  <p className="font-medium text-sm">{u.displayName || u.username}</p>
+                  <p className="text-xs text-muted-foreground">@{u.username}</p>
+                </div>
+                <span className={`inline-flex items-center px-2 py-0.5 rounded text-xs font-medium border ${roleColor(u.role)}`}>
+                  {roleLabel(u.role)}
+                </span>
+              </div>
+              <div className="flex gap-2">
+                <Button size="icon" variant="ghost" className="h-8 w-8" onClick={() => openEdit(u)} data-testid={`button-edit-user-${u.id}`}>
+                  <Pencil className="w-3.5 h-3.5" />
+                </Button>
+                <Button size="icon" variant="ghost" className="h-8 w-8 text-destructive hover:text-destructive" onClick={() => setDeleteId(u.id)} data-testid={`button-delete-user-${u.id}`}>
+                  <Trash2 className="w-3.5 h-3.5" />
+                </Button>
+              </div>
+            </div>
+          ))}
+          {!users?.length && (
+            <div className="text-center py-10 text-muted-foreground">
+              <Users className="w-10 h-10 mx-auto mb-3 opacity-20" />
+              <p className="text-sm">Сотрудников нет</p>
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* Create dialog */}
+      <Dialog open={showCreate} onOpenChange={v => !v && setShowCreate(false)}>
+        <DialogContent className="sm:max-w-sm">
+          <DialogHeader><DialogTitle>Добавить сотрудника</DialogTitle></DialogHeader>
+          <div className="space-y-3">
+            <div>
+              <Label>Имя для отображения</Label>
+              <Input value={createForm.displayName} onChange={e => setCreateForm(f => ({...f, displayName: e.target.value}))} placeholder="Иван Иванов" className="mt-1" />
+            </div>
+            <div>
+              <Label>Логин</Label>
+              <Input value={createForm.username} onChange={e => setCreateForm(f => ({...f, username: e.target.value}))} placeholder="ivan" className="mt-1" />
+            </div>
+            <div>
+              <Label>Пароль (минимум 6 символов)</Label>
+              <Input type="password" value={createForm.password} onChange={e => setCreateForm(f => ({...f, password: e.target.value}))} placeholder="••••••••" className="mt-1" />
+            </div>
+            <div>
+              <Label>Роль</Label>
+              <Select value={createForm.role} onValueChange={v => setCreateForm(f => ({...f, role: v}))}>
+                <SelectTrigger className="mt-1"><SelectValue /></SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="master">Мастер</SelectItem>
+                  <SelectItem value="admin">Администратор</SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
+            <Button className="w-full gap-2" onClick={() => createMutation.mutate()} disabled={!createForm.username || !createForm.password || !createForm.displayName || createMutation.isPending}>
+              {createMutation.isPending ? <Loader2 className="w-4 h-4 animate-spin" /> : <UserPlus className="w-4 h-4" />}
+              Создать
+            </Button>
+          </div>
+        </DialogContent>
+      </Dialog>
+
+      {/* Edit dialog */}
+      <Dialog open={!!editUser} onOpenChange={v => !v && setEditUser(null)}>
+        <DialogContent className="sm:max-w-sm">
+          <DialogHeader><DialogTitle>Редактировать сотрудника</DialogTitle></DialogHeader>
+          <div className="space-y-3">
+            <div>
+              <Label>Имя для отображения</Label>
+              <Input value={editForm.displayName} onChange={e => setEditForm(f => ({...f, displayName: e.target.value}))} className="mt-1" />
+            </div>
+            <div>
+              <Label>Роль</Label>
+              <Select value={editForm.role} onValueChange={v => setEditForm(f => ({...f, role: v}))}>
+                <SelectTrigger className="mt-1"><SelectValue /></SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="master">Мастер</SelectItem>
+                  <SelectItem value="admin">Администратор</SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
+            <div>
+              <Label>Новый пароль (оставьте пустым чтобы не менять)</Label>
+              <Input type="password" value={editForm.password} onChange={e => setEditForm(f => ({...f, password: e.target.value}))} placeholder="••••••••" className="mt-1" />
+            </div>
+            <Button className="w-full gap-2" onClick={() => editMutation.mutate()} disabled={!editForm.displayName || editMutation.isPending}>
+              {editMutation.isPending && <Loader2 className="w-4 h-4 animate-spin" />}
+              Сохранить изменения
+            </Button>
+          </div>
+        </DialogContent>
+      </Dialog>
+
+      {/* Delete confirm */}
+      <AlertDialog open={deleteId !== null} onOpenChange={v => !v && setDeleteId(null)}>
+        <AlertDialogContent>
+          <AlertDialogHeader><AlertDialogTitle>Удалить пользователя?</AlertDialogTitle></AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>Отмена</AlertDialogCancel>
+            <AlertDialogAction
+              onClick={() => deleteId && deleteMutation.mutate(deleteId)}
+              className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
+            >Удалить</AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </div>
   );
 }
@@ -729,7 +879,7 @@ export default function AdminPage() {
             <Truck className="w-4 h-4" /> Поставщики
           </TabsTrigger>
           <TabsTrigger value="users" className="gap-2">
-            <UserPlus className="w-4 h-4" /> Сотрудники
+            <Users className="w-4 h-4" /> Сотрудники
           </TabsTrigger>
         </TabsList>
 

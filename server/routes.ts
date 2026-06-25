@@ -211,6 +211,33 @@ export function registerRoutes(httpServer: Server, app: Express) {
   });
 
   // ─── Admin: User Management ───────────────────────────────────────────────
+  app.get("/api/admin/users", authenticateToken, requireAdmin, (req: AuthRequest, res: Response) => {
+    const allUsers = storage.getAllUsers();
+    res.json(allUsers.map(u => ({ id: u.id, username: u.username, role: u.role, displayName: u.displayName })));
+  });
+
+  app.put("/api/admin/users/:id", authenticateToken, requireAdmin, (req: AuthRequest, res: Response) => {
+    const id = parseInt(req.params.id);
+    const { displayName, role, password } = req.body;
+    const updates: any = {};
+    if (displayName) updates.displayName = displayName;
+    if (role) updates.role = role;
+    if (password) {
+      if (password.length < 6) return res.status(400).json({ error: "Пароль минимум 6 символов" });
+      updates.passwordHash = bcrypt.hashSync(password, 12);
+    }
+    const result = storage.updateUser(id, updates);
+    if (!result) return res.status(404).json({ error: "Пользователь не найден" });
+    res.json({ id: result.id, username: result.username, role: result.role, displayName: result.displayName });
+  });
+
+  app.delete("/api/admin/users/:id", authenticateToken, requireAdmin, (req: AuthRequest, res: Response) => {
+    const id = parseInt(req.params.id);
+    if (req.user?.id === id) return res.status(400).json({ error: "Нельзя удалить себя" });
+    storage.deleteUser(id);
+    res.json({ ok: true });
+  });
+
   app.post("/api/admin/users", authenticateToken, requireAdmin, (req: AuthRequest, res: Response) => {
     const { username, password, role, displayName } = req.body;
     if (!username || !password || !displayName) {
