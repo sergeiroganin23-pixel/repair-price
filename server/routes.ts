@@ -2,14 +2,28 @@ import type { Express, Request, Response, NextFunction } from "express";
 import type { Server } from "http";
 import bcrypt from "bcryptjs";
 import jwt from "jsonwebtoken";
+import { randomUUID } from "crypto";
 import rateLimit from "express-rate-limit";
 import { storage } from "./storage";
 
 const JWT_SECRET = process.env.JWT_SECRET || "repair_jwt_secret_change_in_prod_2024!";
 
-const loginLimiter = rateLimit({ windowMs: 15 * 60 * 1000, max: 10, message: { error: "Слишком много попыток входа. Подождите 15 минут." }, standardHeaders: true, legacyHeaders: false });
-const apiLimiter = rateLimit({ windowMs: 60 * 1000, max: 200, message: { error: "Слишком много запросов." } });
+// Rate limiters
+const loginLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000, // 15 min
+  max: 10,
+  message: { error: "Слишком много попыток входа. Подождите 15 минут." },
+  standardHeaders: true,
+  legacyHeaders: false,
+});
 
+const apiLimiter = rateLimit({
+  windowMs: 60 * 1000,
+  max: 200,
+  message: { error: "Слишком много запросов." },
+});
+
+// Auth middleware
 interface AuthRequest extends Request {
   user?: { id: number; role: string; displayName: string; sessionId?: string };
 }
@@ -20,10 +34,12 @@ function authenticateToken(req: AuthRequest, res: Response, next: NextFunction) 
   if (!token) return res.status(401).json({ error: "Требуется авторизация" });
   try {
     const payload = jwt.verify(token, JWT_SECRET) as any;
-    // Validate session
+    // Проверяем sessionId — если зашли с другого устройства, выкидываем
     if (payload.sessionId) {
-      const session = storage.getSessionBySessionId(payload.sessionId);
-      if (!session) return res.status(401).json({ error: "Сессия завершена" });
+      const session = storage.getSession(payload.id);
+      if (!session || session.sessionId !== payload.sessionId) {
+        return res.status(401).json({ error: "Сессия завершена. Войдите снова." });
+      }
     }
     req.user = payload;
     next();
@@ -33,48 +49,63 @@ function authenticateToken(req: AuthRequest, res: Response, next: NextFunction) 
 }
 
 function requireAdmin(req: AuthRequest, res: Response, next: NextFunction) {
-  if (req.user?.role !== "admin") return res.status(403).json({ error: "Доступ только для администратора" });
+  if (req.user?.role !== "admin") {
+    return res.status(403).json({ error: "Доступ только для администратора" });
+  }
   next();
 }
 
 export function registerRoutes(httpServer: Server, app: Express) {
   app.use("/api", apiLimiter);
 
-  // ─── Auth ──────────────────────────────────────────────────────────────────
+  // ─── Auth ────────────────────────────────────────────────────────────────
   app.post("/api/auth/login", loginLimiter, (req: Request, res: Response) => {
     const { username, password } = req.body;
-    if (!username || !password) return res.status(400).json({ error: "Введите логин и пароль" });
-    if (typeof username !== "string" || username.length > 64) return res.status(400).json({ error: "Неверный формат логина" });
+    if (!username || !password) {
+      return res.status(400).json({ error: "Введите логин и пароль" });
+    }
+    // Sanitize
+    if (typeof username !== "string" || username.length > 64) {
+      return res.status(400).json({ error: "Неверный формат логина" });
+    }
     const user = storage.getUserByUsername(username.trim().toLowerCase());
     if (!user) return res.status(401).json({ error: "Неверный логин или пароль" });
     const valid = bcrypt.compareSync(password, user.passwordHash);
     if (!valid) return res.status(401).json({ error: "Неверный логин или пароль" });
-    const sessionId = Math.random().toString(36).slice(2) + Date.now().toString(36);
-    storage.createSession(user.id, sessionId);
-    const token = jwt.sign({ id: user.id, role: user.role, displayName: user.displayName, sessionId }, JWT_SECRET, { expiresIn: "30d" });
+    const sessionId = randomUUID();
+    storage.upsertSession(user.id, sessionId);
+    const token = jwt.sign(
+      { id: user.id, role: user.role, displayName: user.displayName, sessionId },
+      JWT_SECRET,
+      { expiresIn: "30d" } // долгоживущий токен — выход только вручную или с другого устройства
+    );
     res.json({ token, role: user.role, displayName: user.displayName });
-  });
-
-  app.post("/api/auth/logout", authenticateToken, (req: AuthRequest, res: Response) => {
-    if (req.user?.sessionId) storage.deleteSession(req.user.sessionId);
-    res.json({ ok: true });
   });
 
   app.get("/api/auth/me", authenticateToken, (req: AuthRequest, res: Response) => {
     res.json(req.user);
   });
 
-  // ─── Categories ────────────────────────────────────────────────────────────
-  app.get("/api/categories", (req, res) => res.json(storage.getCategories()));
+  app.post("/api/auth/logout", authenticateToken, (req: AuthRequest, res: Response) => {
+    if (req.user?.id) storage.deleteSession(req.user.id);
+    res.json({ ok: true });
+  });
+
+  // ─── Categories ───────────────────────────────────────────────────────────
+  app.get("/api/categories", (req, res) => {
+    res.json(storage.getCategories());
+  });
 
   app.post("/api/categories", authenticateToken, requireAdmin, (req: AuthRequest, res: Response) => {
     const { name, icon, sortOrder } = req.body;
     if (!name) return res.status(400).json({ error: "Название категории обязательно" });
-    res.json(storage.createCategory({ name, icon: icon || "Smartphone", sortOrder: sortOrder ?? 0 }));
+    const cat = storage.createCategory({ name, icon: icon || "Smartphone", sortOrder: sortOrder ?? 0 });
+    res.json(cat);
   });
 
   app.put("/api/categories/:id", authenticateToken, requireAdmin, (req: AuthRequest, res: Response) => {
-    const result = storage.updateCategory(parseInt(req.params.id), req.body);
+    const id = parseInt(req.params.id);
+    const result = storage.updateCategory(id, req.body);
     if (!result) return res.status(404).json({ error: "Категория не найдена" });
     res.json(result);
   });
@@ -84,7 +115,7 @@ export function registerRoutes(httpServer: Server, app: Express) {
     res.json({ ok: true });
   });
 
-  // ─── Subcategories ─────────────────────────────────────────────────────────
+  // ─── Subcategories ────────────────────────────────────────────
   app.get("/api/subcategories", (req, res) => {
     const catId = req.query.categoryId ? parseInt(req.query.categoryId as string) : null;
     if (!catId) return res.status(400).json({ error: "categoryId обязателен" });
@@ -94,11 +125,13 @@ export function registerRoutes(httpServer: Server, app: Express) {
   app.post("/api/subcategories", authenticateToken, requireAdmin, (req: AuthRequest, res: Response) => {
     const { categoryId, name, sortOrder } = req.body;
     if (!categoryId || !name) return res.status(400).json({ error: "Категория и название обязательны" });
-    res.json(storage.createSubcategory({ categoryId, name, sortOrder: sortOrder ?? 0 }));
+    const sub = storage.createSubcategory({ categoryId, name, sortOrder: sortOrder ?? 0 });
+    res.json(sub);
   });
 
   app.put("/api/subcategories/:id", authenticateToken, requireAdmin, (req: AuthRequest, res: Response) => {
-    const result = storage.updateSubcategory(parseInt(req.params.id), req.body);
+    const id = parseInt(req.params.id);
+    const result = storage.updateSubcategory(id, req.body);
     if (!result) return res.status(404).json({ error: "Подкатегория не найдена" });
     res.json(result);
   });
@@ -108,19 +141,24 @@ export function registerRoutes(httpServer: Server, app: Express) {
     res.json({ ok: true });
   });
 
-  // ─── Device Models ─────────────────────────────────────────────────────────
+  // ─── Device Models ────────────────────────────────────────────
   app.get("/api/models", (req, res) => {
     const catId = req.query.categoryId ? parseInt(req.query.categoryId as string) : null;
     const subId = req.query.subcategoryId ? parseInt(req.query.subcategoryId as string) : null;
-    if (subId) return res.json(storage.getDeviceModelsBySubcategory(subId));
-    if (catId) return res.json(storage.getDeviceModelsByCategory(catId));
-    res.json(storage.getAllDeviceModels());
+    if (subId) {
+      res.json(storage.getDeviceModelsBySubcategory(subId));
+    } else if (catId) {
+      res.json(storage.getDeviceModelsByCategory(catId));
+    } else {
+      res.json(storage.getAllDeviceModels());
+    }
   });
 
   app.post("/api/models", authenticateToken, requireAdmin, (req: AuthRequest, res: Response) => {
     const { categoryId, subcategoryId, name, sortOrder } = req.body;
     if (!categoryId || !name) return res.status(400).json({ error: "Категория и название обязательны" });
-    res.json(storage.createDeviceModel({ categoryId, subcategoryId: subcategoryId ?? null, name, sortOrder: sortOrder ?? 0 }));
+    const model = storage.createDeviceModel({ categoryId, subcategoryId: subcategoryId ?? null, name, sortOrder: sortOrder ?? 0 });
+    res.json(model);
   });
 
   app.put("/api/models/:id", authenticateToken, requireAdmin, (req: AuthRequest, res: Response) => {
@@ -134,7 +172,7 @@ export function registerRoutes(httpServer: Server, app: Express) {
     res.json({ ok: true });
   });
 
-  // ─── Services ──────────────────────────────────────────────────────────────
+  // ─── Services ─────────────────────────────────────────────────────────────
   app.get("/api/services", (req, res) => {
     const modelId = req.query.modelId ? parseInt(req.query.modelId as string) : null;
     if (!modelId) return res.status(400).json({ error: "Укажите modelId" });
@@ -143,8 +181,11 @@ export function registerRoutes(httpServer: Server, app: Express) {
 
   app.post("/api/services", authenticateToken, requireAdmin, (req: AuthRequest, res: Response) => {
     const { deviceModelId, name, price, priceMax, duration, sortOrder } = req.body;
-    if (!deviceModelId || !name || price === undefined) return res.status(400).json({ error: "Обязательные поля: deviceModelId, name, price" });
-    res.json(storage.createService({ deviceModelId, name, price, priceMax: priceMax || null, duration: duration || null, sortOrder: sortOrder ?? 0 }));
+    if (!deviceModelId || !name || price === undefined) {
+      return res.status(400).json({ error: "Обязательные поля: deviceModelId, name, price" });
+    }
+    const svc = storage.createService({ deviceModelId, name, price, priceMax: priceMax || null, duration: duration || null, sortOrder: sortOrder ?? 0 });
+    res.json(svc);
   });
 
   app.put("/api/services/:id", authenticateToken, requireAdmin, (req: AuthRequest, res: Response) => {
@@ -158,13 +199,16 @@ export function registerRoutes(httpServer: Server, app: Express) {
     res.json({ ok: true });
   });
 
-  // ─── Suppliers ─────────────────────────────────────────────────────────────
-  app.get("/api/suppliers", (req, res) => res.json(storage.getSuppliers()));
+  // ─── Suppliers ────────────────────────────────────────────────────────────
+  app.get("/api/suppliers", (req, res) => {
+    res.json(storage.getSuppliers());
+  });
 
   app.post("/api/suppliers", authenticateToken, requireAdmin, (req: AuthRequest, res: Response) => {
     const { name, type, contact, phone, website, notes, sortOrder } = req.body;
     if (!name) return res.status(400).json({ error: "Название обязательно" });
-    res.json(storage.createSupplier({ name, type: type || "supplier", contact: contact || null, phone: phone || null, website: website || null, notes: notes || null, sortOrder: sortOrder ?? 0 }));
+    const sup = storage.createSupplier({ name, type: type || "supplier", contact: contact || null, phone: phone || null, website: website || null, notes: notes || null, sortOrder: sortOrder ?? 0 });
+    res.json(sup);
   });
 
   app.put("/api/suppliers/:id", authenticateToken, requireAdmin, (req: AuthRequest, res: Response) => {
@@ -178,15 +222,28 @@ export function registerRoutes(httpServer: Server, app: Express) {
     res.json({ ok: true });
   });
 
-  // ─── Change Requests ───────────────────────────────────────────────────────
+  // ─── Change Requests ──────────────────────────────────────────────────────
   app.get("/api/requests", authenticateToken, (req: AuthRequest, res: Response) => {
-    res.json(req.user?.role === "admin" ? storage.getChangeRequests() : storage.getPendingChangeRequests());
+    if (req.user?.role === "admin") {
+      res.json(storage.getChangeRequests());
+    } else {
+      res.json(storage.getPendingChangeRequests());
+    }
   });
 
   app.post("/api/requests", authenticateToken, (req: AuthRequest, res: Response) => {
     const { type, description, targetId, targetType, proposedValue } = req.body;
     if (!type || !description) return res.status(400).json({ error: "Тип и описание обязательны" });
-    res.json(storage.createChangeRequest({ userId: req.user!.id, type, description, targetId: targetId || null, targetType: targetType || null, proposedValue: proposedValue ? JSON.stringify(proposedValue) : null, createdAt: new Date().toISOString() }));
+    const cr = storage.createChangeRequest({
+      userId: req.user!.id,
+      type,
+      description,
+      targetId: targetId || null,
+      targetType: targetType || null,
+      proposedValue: proposedValue ? JSON.stringify(proposedValue) : null,
+      createdAt: new Date().toISOString(),
+    });
+    res.json(cr);
   });
 
   app.put("/api/requests/:id", authenticateToken, requireAdmin, (req: AuthRequest, res: Response) => {
@@ -197,18 +254,10 @@ export function registerRoutes(httpServer: Server, app: Express) {
     res.json(result);
   });
 
-  // ─── Admin: Users ──────────────────────────────────────────────────────────
+  // ─── Admin: User Management ───────────────────────────────────────────────
   app.get("/api/admin/users", authenticateToken, requireAdmin, (req: AuthRequest, res: Response) => {
-    res.json(storage.getAllUsers().map(u => ({ id: u.id, username: u.username, role: u.role, displayName: u.displayName })));
-  });
-
-  app.post("/api/admin/users", authenticateToken, requireAdmin, (req: AuthRequest, res: Response) => {
-    const { username, password, role, displayName } = req.body;
-    if (!username || !password || !displayName) return res.status(400).json({ error: "Логин, пароль и имя обязательны" });
-    if (password.length < 6) return res.status(400).json({ error: "Пароль минимум 6 символов" });
-    if (storage.getUserByUsername(username)) return res.status(409).json({ error: "Пользователь с таким логином уже существует" });
-    const user = storage.createUser({ username: username.toLowerCase(), passwordHash: bcrypt.hashSync(password, 12), role: role || "master", displayName });
-    res.json({ id: user.id, username: user.username, role: user.role, displayName: user.displayName });
+    const allUsers = storage.getAllUsers();
+    res.json(allUsers.map(u => ({ id: u.id, username: u.username, role: u.role, displayName: u.displayName })));
   });
 
   app.put("/api/admin/users/:id", authenticateToken, requireAdmin, (req: AuthRequest, res: Response) => {
@@ -233,34 +282,156 @@ export function registerRoutes(httpServer: Server, app: Express) {
     res.json({ ok: true });
   });
 
-  // ─── Orders (email) ────────────────────────────────────────────────────────
-  app.get("/api/orders", authenticateToken, (req: AuthRequest, res: Response) => res.json(storage.getOrders()));
-  app.get("/api/orders/new-count", authenticateToken, (req: AuthRequest, res: Response) => res.json({ count: storage.getNewOrdersCount() }));
+  app.post("/api/admin/users", authenticateToken, requireAdmin, (req: AuthRequest, res: Response) => {
+    const { username, password, role, displayName } = req.body;
+    if (!username || !password || !displayName) {
+      return res.status(400).json({ error: "Логин, пароль и имя обязательны" });
+    }
+    if (password.length < 6) return res.status(400).json({ error: "Пароль минимум 6 символов" });
+    const existing = storage.getUserByUsername(username);
+    if (existing) return res.status(409).json({ error: "Пользователь с таким логином уже существует" });
+    const passwordHash = bcrypt.hashSync(password, 12);
+    const user = storage.createUser({ username: username.toLowerCase(), passwordHash, role: role || "master", displayName });
+    res.json({ id: user.id, username: user.username, role: user.role, displayName: user.displayName });
+  });
 
+  // ─── Repairs (Заявки/Ремонты) ───────────────────────────────────────────────
+  app.get("/api/repairs", authenticateToken, (req: AuthRequest, res: Response) => {
+    res.json(storage.getRepairs());
+  });
+
+  app.get("/api/repairs/new-count", authenticateToken, (req: AuthRequest, res: Response) => {
+    res.json({ count: storage.getNewRepairsCount() });
+  });
+
+  app.get("/api/repairs/:id", authenticateToken, (req: AuthRequest, res: Response) => {
+    const repair = storage.getRepairById(parseInt(req.params.id));
+    if (!repair) return res.status(404).json({ error: "Заявка не найдена" });
+    res.json(repair);
+  });
+
+  app.post("/api/repairs", authenticateToken, (req: AuthRequest, res: Response) => {
+    const { clientName, phone, deviceType, brand, model, imei, appearance, issue,
+            estimatedPrice, finalPrice, prepayment, deadline, warranty,
+            masterId, masterComment, status, clientId, discount } = req.body;
+    if (!clientName && !clientId) {
+      return res.status(400).json({ error: "Укажите клиента" });
+    }
+    // Автоматически создаём или находим клиента по телефону
+    let resolvedClientId = clientId || null;
+    if (phone && !resolvedClientId) {
+      const existing = storage.getClientByPhone(phone);
+      if (existing) {
+        resolvedClientId = existing.id;
+      } else if (clientName) {
+        const newClient = storage.createClient({
+          name: clientName,
+          phone: phone || "",
+          email: null,
+          notes: null,
+          createdAt: new Date().toISOString(),
+        });
+        resolvedClientId = newClient.id;
+      }
+    }
+    const now = new Date().toISOString();
+    const repair = storage.createRepair({
+      clientId: resolvedClientId,
+      clientName: clientName || null,
+      phone: phone || null,
+      deviceType: deviceType || null,
+      brand: brand || null,
+      model: model || null,
+      imei: imei || null,
+      appearance: appearance || null,
+      issue: issue || null,
+      estimatedPrice: estimatedPrice || null,
+      finalPrice: finalPrice || null,
+      prepayment: prepayment || null,
+      deadline: deadline || null,
+      warranty: warranty || null,
+      masterId: masterId || null,
+      masterComment: masterComment || null,
+      status: status || "новая",
+      called: false,
+      source: "manual",
+      messageId: null,
+      sourceUrl: null,
+      discount: discount || null,
+      rawText: null,
+      location: null,
+      createdAt: now,
+      updatedAt: now,
+    });
+    res.json(repair);
+  });
+
+  app.put("/api/repairs/:id", authenticateToken, (req: AuthRequest, res: Response) => {
+    const id = parseInt(req.params.id);
+    const result = storage.updateRepair(id, req.body);
+    if (!result) return res.status(404).json({ error: "Заявка не найдена" });
+    res.json(result);
+  });
+
+  app.delete("/api/repairs/:id", authenticateToken, requireAdmin, (req: AuthRequest, res: Response) => {
+    const id = parseInt(req.params.id);
+    storage.updateRepair(id, { status: "отказ" }); // мягкое удаление
+    res.json({ ok: true });
+  });
+
+  // Алиасы /api/orders для совместимости с фронтендом
+  app.get("/api/orders", authenticateToken, (req: AuthRequest, res: Response) => {
+    res.json(storage.getRepairs());
+  });
+  app.get("/api/orders/new-count", authenticateToken, (req: AuthRequest, res: Response) => {
+    res.json({ count: storage.getNewRepairsCount() });
+  });
   app.put("/api/orders/:id/status", authenticateToken, (req: AuthRequest, res: Response) => {
+    const id = parseInt(req.params.id);
     const { status } = req.body;
-    const valid = ["новая", "в_работе", "готово", "отказ", "записал"];
-    if (!status || !valid.includes(status)) return res.status(400).json({ error: "Недопустимый статус" });
-    const result = storage.updateOrderStatus(parseInt(req.params.id), status);
+    const validStatuses = ["новая", "в_работе", "готово", "отказ", "записал"];
+    if (!status || !validStatuses.includes(status)) {
+      return res.status(400).json({ error: "Недопустимый статус" });
+    }
+    const result = storage.updateRepair(id, { status });
     if (!result) return res.status(404).json({ error: "Заявка не найдена" });
     res.json(result);
   });
-
   app.put("/api/orders/:id/called", authenticateToken, (req: AuthRequest, res: Response) => {
+    const id = parseInt(req.params.id);
     const { called } = req.body;
-    if (typeof called !== "boolean") return res.status(400).json({ error: "called должен быть boolean" });
-    const result = storage.updateOrderCalled(parseInt(req.params.id), called);
+    if (typeof called !== "boolean") {
+      return res.status(400).json({ error: "called должен быть boolean" });
+    }
+    const result = storage.updateRepair(id, { called });
     if (!result) return res.status(404).json({ error: "Заявка не найдена" });
     res.json(result);
   });
 
-  // ─── Clients ───────────────────────────────────────────────────────────────
-  app.get("/api/clients", authenticateToken, (req: AuthRequest, res: Response) => res.json(storage.getClients()));
+  // ─── Clients (База клиентов) ─────────────────────────────────────────────────
+  app.get("/api/clients", authenticateToken, (req: AuthRequest, res: Response) => {
+    const q = req.query.q as string | undefined;
+    if (q) return res.json(storage.searchClients(q));
+    res.json(storage.getClients());
+  });
+
+  app.get("/api/clients/:id", authenticateToken, (req: AuthRequest, res: Response) => {
+    const client = storage.getClientById(parseInt(req.params.id));
+    if (!client) return res.status(404).json({ error: "Клиент не найден" });
+    res.json(client);
+  });
+
+  app.get("/api/clients/:id/repairs", authenticateToken, (req: AuthRequest, res: Response) => {
+    res.json(storage.getRepairsByClient(parseInt(req.params.id)));
+  });
 
   app.post("/api/clients", authenticateToken, (req: AuthRequest, res: Response) => {
     const { name, phone, email, notes } = req.body;
-    if (!name) return res.status(400).json({ error: "Имя клиента обязательно" });
-    res.json(storage.createClient({ name, phone: phone || null, email: email || null, notes: notes || null, createdAt: new Date().toISOString() }));
+    if (!name || !phone) return res.status(400).json({ error: "Имя и телефон обязательны" });
+    const existing = storage.getClientByPhone(phone);
+    if (existing) return res.status(409).json({ error: "Клиент с таким телефоном уже существует", client: existing });
+    const client = storage.createClient({ name, phone, email: email || null, notes: notes || null, createdAt: new Date().toISOString() });
+    res.json(client);
   });
 
   app.put("/api/clients/:id", authenticateToken, (req: AuthRequest, res: Response) => {
@@ -274,45 +445,33 @@ export function registerRoutes(httpServer: Server, app: Express) {
     res.json({ ok: true });
   });
 
-  // ─── Repairs (manual CRM) ──────────────────────────────────────────────────
-  app.get("/api/repairs", authenticateToken, (req: AuthRequest, res: Response) => res.json(storage.getRepairs()));
-  app.get("/api/repairs/new-count", authenticateToken, (req: AuthRequest, res: Response) => res.json({ count: storage.getNewRepairsCount() }));
-
-  app.get("/api/repairs/by-client/:clientId", authenticateToken, (req: AuthRequest, res: Response) => {
-    res.json(storage.getRepairsByClient(parseInt(req.params.clientId)));
+  // ─── Parts (Склад запчастей) ──────────────────────────────────────────────────
+  app.get("/api/parts", authenticateToken, (_req: AuthRequest, res: Response) => {
+    res.json(storage.getParts());
   });
 
-  app.post("/api/repairs", authenticateToken, (req: AuthRequest, res: Response) => {
-    const now = new Date().toISOString();
-    const data = { ...req.body, createdAt: now, updatedAt: now, source: req.body.source || "manual" };
-    if (!data.clientName && !data.clientId) return res.status(400).json({ error: "Имя клиента обязательно" });
-    res.json(storage.createRepair(data));
+  app.get("/api/parts/:id", authenticateToken, (req: AuthRequest, res: Response) => {
+    const part = storage.getPartById(parseInt(req.params.id));
+    if (!part) return res.status(404).json({ error: "Запчасть не найдена" });
+    res.json(part);
   });
-
-  app.put("/api/repairs/:id", authenticateToken, (req: AuthRequest, res: Response) => {
-    const data = { ...req.body, updatedAt: new Date().toISOString() };
-    const result = storage.updateRepair(parseInt(req.params.id), data);
-    if (!result) return res.status(404).json({ error: "Ремонт не найден" });
-    res.json(result);
-  });
-
-  app.delete("/api/repairs/:id", authenticateToken, requireAdmin, (req: AuthRequest, res: Response) => {
-    storage.deleteRepair(parseInt(req.params.id));
-    res.json({ ok: true });
-  });
-
-  // ─── Parts (склад) ─────────────────────────────────────────────────────────
-  app.get("/api/parts", authenticateToken, (req: AuthRequest, res: Response) => res.json(storage.getParts()));
 
   app.post("/api/parts", authenticateToken, (req: AuthRequest, res: Response) => {
-    const now = new Date().toISOString();
     const { name, sku, category, quantity, minQuantity, buyPrice, sellPrice, supplierId, notes } = req.body;
-    if (!name) return res.status(400).json({ error: "Название запчасти обязательно" });
-    res.json(storage.createPart({ name, sku: sku || null, category: category || null, quantity: quantity ?? 0, minQuantity: minQuantity ?? 1, buyPrice: buyPrice || null, sellPrice: sellPrice || null, supplierId: supplierId || null, notes: notes || null, createdAt: now, updatedAt: now }));
+    if (!name) return res.status(400).json({ error: "Название обязательно" });
+    const now = new Date().toISOString();
+    const part = storage.createPart({
+      name, sku: sku || null, category: category || null,
+      quantity: quantity ?? 0, minQuantity: minQuantity ?? 1,
+      buyPrice: buyPrice ?? null, sellPrice: sellPrice ?? null,
+      supplierId: supplierId ?? null, notes: notes || null,
+      createdAt: now, updatedAt: now,
+    });
+    res.json(part);
   });
 
   app.put("/api/parts/:id", authenticateToken, (req: AuthRequest, res: Response) => {
-    const result = storage.updatePart(parseInt(req.params.id), { ...req.body, updatedAt: new Date().toISOString() });
+    const result = storage.updatePart(parseInt(req.params.id), req.body);
     if (!result) return res.status(404).json({ error: "Запчасть не найдена" });
     res.json(result);
   });
@@ -322,41 +481,67 @@ export function registerRoutes(httpServer: Server, app: Express) {
     res.json({ ok: true });
   });
 
-  app.post("/api/parts/:id/in", authenticateToken, (req: AuthRequest, res: Response) => {
-    const { quantity, price, comment } = req.body;
-    if (!quantity || quantity <= 0) return res.status(400).json({ error: "Количество должно быть больше 0" });
-    try {
-      res.json(storage.partIn(parseInt(req.params.id), quantity, price || null, comment || null));
-    } catch (e: any) {
-      res.status(400).json({ error: e.message });
-    }
-  });
-
-  app.post("/api/parts/:id/out", authenticateToken, (req: AuthRequest, res: Response) => {
-    const { quantity, repairId, comment } = req.body;
-    if (!quantity || quantity <= 0) return res.status(400).json({ error: "Количество должно быть больше 0" });
-    try {
-      res.json(storage.partOut(parseInt(req.params.id), quantity, repairId || null, comment || null));
-    } catch (e: any) {
-      res.status(400).json({ error: e.message });
-    }
-  });
-
+  // ─── Part Movements (Приход/Расход) ─────────────────────────────────────────────
   app.get("/api/parts/:id/movements", authenticateToken, (req: AuthRequest, res: Response) => {
-    res.json(storage.getPartMovements(parseInt(req.params.id)));
+    res.json(storage.getMovementsByPart(parseInt(req.params.id)));
   });
 
-  // ─── Transactions (касса) ──────────────────────────────────────────────────
+  // POST /api/parts/:id/in — приход
+  app.post("/api/parts/:id/in", authenticateToken, (req: AuthRequest, res: Response) => {
+    const partId = parseInt(req.params.id);
+    const { quantity, price, comment } = req.body;
+    if (!quantity || quantity <= 0) return res.status(400).json({ error: "Количество должно быть > 0" });
+    const part = storage.getPartById(partId);
+    if (!part) return res.status(404).json({ error: "Запчасть не найдена" });
+    storage.createMovement({ partId, type: "in", quantity, price: price ?? null, repairId: null, comment: comment || null, createdAt: new Date().toISOString() });
+    const updated = storage.adjustPartQuantity(partId, quantity);
+    res.json(updated);
+  });
+
+  // POST /api/parts/:id/out — расход
+  app.post("/api/parts/:id/out", authenticateToken, (req: AuthRequest, res: Response) => {
+    const partId = parseInt(req.params.id);
+    const { quantity, repairId, comment } = req.body;
+    if (!quantity || quantity <= 0) return res.status(400).json({ error: "Количество должно быть > 0" });
+    const part = storage.getPartById(partId);
+    if (!part) return res.status(404).json({ error: "Запчасть не найдена" });
+    if (part.quantity < quantity) return res.status(400).json({ error: `Недостаточно на складе: ${part.quantity} шт.` });
+    storage.createMovement({ partId, type: "out", quantity, price: null, repairId: repairId ?? null, comment: comment || null, createdAt: new Date().toISOString() });
+    const updated = storage.adjustPartQuantity(partId, -quantity);
+    res.json(updated);
+  });
+
+  // ─── Transactions (Касса) ──────────────────────────────────────────────────────────
   app.get("/api/transactions", authenticateToken, (req: AuthRequest, res: Response) => {
-    const { type, dateFrom, dateTo } = req.query as any;
-    res.json(storage.getTransactions({ type, dateFrom, dateTo }));
+    const { from, to } = req.query as { from?: string; to?: string };
+    res.json(storage.getTransactions(from, to));
   });
 
   app.post("/api/transactions", authenticateToken, (req: AuthRequest, res: Response) => {
     const { type, amount, category, description, repairId, paymentMethod, date } = req.body;
-    if (!type || !amount || !category) return res.status(400).json({ error: "Тип, сумма и категория обязательны" });
+    if (!type || !amount || !category) {
+      return res.status(400).json({ error: "Тип, сумма и категория обязательны" });
+    }
+    if (!['income', 'expense'].includes(type)) {
+      return res.status(400).json({ error: "Тип должен быть income или expense" });
+    }
     const now = new Date().toISOString();
-    res.json(storage.createTransaction({ type, amount, category, description: description || null, repairId: repairId || null, paymentMethod: paymentMethod || "cash", createdAt: now, date: date || now.slice(0, 10) }));
+    const txDate = date || now.slice(0, 10);
+    const tx = storage.createTransaction({
+      type, amount: parseFloat(amount), category,
+      description: description || null,
+      repairId: repairId ?? null,
+      paymentMethod: paymentMethod || 'cash',
+      createdAt: now,
+      date: txDate,
+    });
+    res.json(tx);
+  });
+
+  app.put("/api/transactions/:id", authenticateToken, (req: AuthRequest, res: Response) => {
+    const result = storage.updateTransaction(parseInt(req.params.id), req.body);
+    if (!result) return res.status(404).json({ error: "Операция не найдена" });
+    res.json(result);
   });
 
   app.delete("/api/transactions/:id", authenticateToken, requireAdmin, (req: AuthRequest, res: Response) => {
@@ -364,41 +549,7 @@ export function registerRoutes(httpServer: Server, app: Express) {
     res.json({ ok: true });
   });
 
-  // ─── Salaries (зарплата мастеров) ──────────────────────────────────────────
-  app.get("/api/salaries", authenticateToken, (req: AuthRequest, res: Response) => {
-    const { masterId, period, paid } = req.query as any;
-    const filters: any = {};
-    if (masterId) filters.masterId = parseInt(masterId);
-    if (period) filters.period = period;
-    if (paid !== undefined) filters.paid = paid === "true";
-    res.json(storage.getSalaries(Object.keys(filters).length ? filters : undefined));
-  });
-
-  app.get("/api/salaries/totals", authenticateToken, (req: AuthRequest, res: Response) => {
-    const { masterId, period } = req.query as any;
-    if (!masterId || !period) return res.status(400).json({ error: "masterId и period обязательны" });
-    res.json(storage.getSalaryTotals(parseInt(masterId), period));
-  });
-
-  app.post("/api/salaries", authenticateToken, requireAdmin, (req: AuthRequest, res: Response) => {
-    const { masterId, masterName, type, amount, description, repairId, period, paymentMethod, date } = req.body;
-    if (!masterId || !masterName || !type || !amount || !period) {
-      return res.status(400).json({ error: "masterId, masterName, type, amount, period обязательны" });
-    }
-    const now = new Date().toISOString();
-    res.json(storage.createSalary({ masterId, masterName, type, amount, description: description || null, repairId: repairId || null, period, paymentMethod: paymentMethod || "cash", paid: false, createdAt: now, date: date || now.slice(0, 10) }));
-  });
-
-  app.put("/api/salaries/:id/paid", authenticateToken, requireAdmin, (req: AuthRequest, res: Response) => {
-    const { paid } = req.body;
-    if (typeof paid !== "boolean") return res.status(400).json({ error: "paid должен быть boolean" });
-    const result = storage.updateSalaryPaid(parseInt(req.params.id), paid);
-    if (!result) return res.status(404).json({ error: "Запись не найдена" });
-    res.json(result);
-  });
-
-  app.delete("/api/salaries/:id", authenticateToken, requireAdmin, (req: AuthRequest, res: Response) => {
-    storage.deleteSalary(parseInt(req.params.id));
-    res.json({ ok: true });
-  });
+  // Автозапись дохода при переводе заявки в 'готово'
+  // (вызывается из PUT /api/repairs/:id когда статус становится готово)
+  // — уже обрабатывается на фронтенде через кнопку в FinancePage
 }
